@@ -10,6 +10,7 @@
 #include "ui/View.h"
 #include "app/Store.h"
 #include "ui/Layout.h"
+#include "ui/MarkdownView.h"
 #include <vector>
 
 namespace lj {
@@ -24,6 +25,7 @@ public:
     void Layout(const D2D1_RECT_F& area, Canvas& cv) override;
     void Update(float dt, const Input& in) override;
     void Paint(Canvas& cv) override;
+    void DebugForcePreview() override;   // 截图自检：造 md 示例卡并展开，验证阅读视图
 
 private:
     void Reload();
@@ -39,6 +41,11 @@ private:
     std::vector<D2D1_RECT_F> m_cardRects;
     std::vector<D2D1_RECT_F> m_delRects;
     std::vector<D2D1_RECT_F> m_expandRects;
+
+    // Markdown 阅读视图：展开态按 Obsidian 阅读视图渲染，可切回源码
+    std::vector<lj::MarkdownView> m_md;
+    std::vector<bool>        m_mdMode;         // true = 阅读视图（默认）
+    std::vector<D2D1_RECT_F> m_mdToggleRects;
 
     Canvas*     m_cv = nullptr;   // 供展开/删除后即时重排（不依赖下一帧 Layout）
 

@@ -1305,17 +1305,15 @@ void RoadmapView::PaintPreviewOverlay(Canvas& cv)
     cv.Text(meta, { m_pvCard.left + 30.0f, m_pvCard.top + 66.0f,
                     m_pvCard.right - 30.0f, m_pvCard.top + 86.0f }, ms, pal.ink500);
 
-    // 正文（裁剪 + 滚轮滚动）
-    TextStyle bs; bs.role = FontRole::Sans; bs.size = 13.5f; bs.vAlign = VAlign::Top;
-    bs.weight = DWRITE_FONT_WEIGHT_NORMAL;
+    // 正文（Markdown 阅读视图：渲染标题/列表/粗体/代码块…；裁剪 + 滚轮滚动）
     float bodyW = m_pvBody.right - m_pvBody.left;
-    m_pvContentH = cv.MeasureHeight(body, bs, bodyW);   // 实测高度，供滚轮裁剪
+    // 以 md 渲染（body 为纯文本时等价普通段落，天然兼容）
+    m_pvMd.SetMarkdown(body);
+    m_pvContentH = m_pvMd.Layout(bodyW, cv);   // 实测高度，供滚轮裁剪
 
     cv.PushClip(m_pvBody);
-    cv.PushTransform(D2D1::Matrix3x2F::Translation(0.0f, -m_previewScroll));
-    cv.Text(body, { m_pvBody.left, m_pvBody.top, m_pvBody.right, m_pvBody.top + m_pvContentH + 40.0f },
-            bs, pal.ink900);
-    cv.PopTransform();
+    m_pvMd.Paint(cv, m_pvBody.left, m_pvBody.top - m_previewScroll,
+                 m_previewScroll, m_previewScroll + (m_pvBody.bottom - m_pvBody.top));
     cv.PopClip();
 
     // 正文底部若被裁剪：纸面渐隐提示 + 右侧可见滚动条（指示可滚动与位置）

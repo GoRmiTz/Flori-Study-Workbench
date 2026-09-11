@@ -407,8 +407,8 @@ void AchieveView::Layout(const D2D1_RECT_F& area, Canvas& cv)
             float total = 0.0f;
             for (int i = 0; i < n; ++i)
                 total += headH + (m_pacts[i].members.empty() ? 0.0f : mateH) + 14.0f;
-            // 无契约时给空态文案留 66px，避免与「返回首页」按钮重叠
-            D2D1_RECT_F listBlock = flow.block((std::max)(66.0f, total));
+            // 无契约时给空态文案（两行）留 92px，避免与「返回首页」按钮重叠
+            D2D1_RECT_F listBlock = flow.block((std::max)(92.0f, total));
             float y = listBlock.top;
             for (int i = 0; i < n; ++i) {
                 const auto& p = m_pacts[i];
@@ -978,10 +978,13 @@ void AchieveView::PaintF4(Canvas& cv)
     }
 
     if (m_pactRects.empty() && !m_editingPact) {
+        // 两行文案（旧版单行超宽被裁剪，表现为「文字显示不全」）
         TextStyle es2; es2.role = FontRole::Sans; es2.size = 13.0f;
-        cv.Text(L"还没有契约。点「＋ 新建契约」定一个期限 + 规则的自律约定，"
-                L"再用「＋ 邀请队友」拉上同伴一起打卡（队友进度本地记录）。",
-                { m_tabF3.bounds.left + 26.0f, m_newPactBtn.bounds.bottom + 26.0f, m_tabF3.bounds.right - 26.0f, m_newPactBtn.bounds.bottom + 52.0f }, es2, pal.ink500);
+        float ey = m_newPactBtn.bounds.bottom + 20.0f;
+        cv.Text(L"还没有契约。点「＋ 新建契约」定一个期限与规则的自律约定，",
+                { m_tabF3.bounds.left + 26.0f, ey, m_tabF3.bounds.right - 26.0f, ey + 20.0f }, es2, pal.ink500);
+        cv.Text(L"再用「＋ 邀请队友」拉上同伴一起打卡（队友进度本地记录）。",
+                { m_tabF3.bounds.left + 26.0f, ey + 22.0f, m_tabF3.bounds.right - 26.0f, ey + 42.0f }, es2, pal.ink500);
     }
 
     m_backBtn.Paint(cv);

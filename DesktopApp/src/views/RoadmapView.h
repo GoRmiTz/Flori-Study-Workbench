@@ -9,6 +9,8 @@
 // ============================================================
 #include "ui/View.h"
 #include "ui/Widget.h"
+#include "ui/FieldEdit.h"
+#include "ui/MarkdownView.h"
 #include "app/Data.h"
 #include "app/Store.h"
 #include "app/Cloud.h"       // §4 公共专栏 REST
@@ -80,8 +82,6 @@ private:
     std::wstring GenId() const;
     void DebugForceOpen() override;
     void DebugForcePreview() override;
-    // 标题隐藏代理 EDIT 的子类化：Enter 跳正文（避免单行 EDIT 蜂鸣）、Esc 关编辑器、隐藏原生光标
-    static LRESULT CALLBACK TitleEditProc(HWND w, UINT msg, WPARAM wp, LPARAM lp);
 
     // 列表状态
     std::vector<Column> m_cols;
@@ -94,13 +94,14 @@ private:
     int m_hoverCard = -1;
     bool IsColFav(const std::wstring& id) const;
 
-    // 私有专栏预览弹层（只读，点卡片进入）
+    // 私有专栏预览弹层（只读，点卡片进入；正文 Markdown 阅读视图）
     bool      m_previewing = false;
     std::wstring m_previewId;
     float     m_previewAnim = 0.0f;
     float     m_previewScroll = 0.0f;
     D2D1_RECT_F m_pvCard{}, m_pvBody{}, m_pvClose{}, m_pvEdit{}, m_pvDelete{};
     float     m_pvContentH = 0.0f;       // 正文实测高度（用于滚轮裁剪）
+    MarkdownView m_pvMd;                 // 正文渲染器（SetMarkdown + Layout 按宽缓存）
 
     // 公共专栏详情弹层
     bool      m_pubPreviewing = false;
@@ -116,28 +117,27 @@ private:
     std::mutex  m_pubDetailMu;
     net::Response m_pubDetailResp{};
     std::atomic<bool> m_pubDetailDirty{ false };
-    // 评论输入：隐藏 EDIT 代理（同 RoomView）
-    HWND      m_pubCommentEdit = nullptr;
-    WNDPROC   m_pubCommentOld = nullptr;
+    // 评论输入（v2 统一输入框，单行；文字/光标/IME 由 D3D 自绘）
+    FieldEdit m_pubComment;
+    bool      m_pubCommentEdit = false;
     std::wstring m_pubCommentDraft;
-    void EnsurePubCommentEdit();
     void BeginPubCommentEdit();
     void EndPubCommentEdit(bool submit);
-    static LRESULT CALLBACK PubCommentEditProc(HWND w, UINT msg, WPARAM wp, LPARAM lp);
 
     Button m_newBtn;
     Button m_backBtn;
     std::vector<Widget*> m_widgets;
 
-    // 编辑器（Win32 EDIT 承载）
+    // 编辑器（正文 RichEdit 承载富文本；标题为 v2 统一输入框）
     bool      m_editing = false;
     std::wstring m_editId;                // 正在编辑的专栏 id；空 = 新建
-    HWND      m_edTitle = nullptr;        // 标题（单行，隐藏输入代理）
-    HWND      m_edBody = nullptr;         // 正文（多行）
+    HWND      m_edBody = nullptr;         // 正文（多行 RichEdit）
     HFONT     m_edFont = nullptr;
-    WNDPROC   m_edTitleOld = nullptr;     // 标题代理原窗口过程（子类化用）
-    WNDPROC   m_titleOld = nullptr;
-    WNDPROC   m_bodyOld = nullptr;
+    FieldEdit m_edTitle;                  // 标题（v2 统一输入框）
+    std::wstring m_edTitleBuf;            // 标题缓冲（焦点在正文/标题间切换时保持）
+    bool      m_titleActive = false;      // 标题编辑会话进行中
+    Canvas*   m_cvCached = nullptr;
+    void CommitTitleEdit();               // 标题失焦/回车时把缓冲落回 m_edTitleBuf
     float     m_editAnim = 0.0f;          // 弹层淡入淡出 0..1
 
     D2D1_RECT_F m_edCard{}, m_edTitleBox{}, m_edBodyBox{};

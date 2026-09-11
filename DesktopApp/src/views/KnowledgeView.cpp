@@ -31,10 +31,48 @@ void KnowledgeView::OnEnter()
     Reload();
 }
 
+// 截图自检：造一条含完整 Markdown 语法的示例卡并展开，验证阅读视图
+void KnowledgeView::DebugForcePreview()
+{
+    LogLine(L"[kb] DebugForcePreview enter, cards=%d", (int)m_cards.size());
+    if (m_cards.empty()) {
+        KCard c;
+        c.id = L"demo_md";
+        c.title = L"示例考点 · Markdown 阅读视图";
+        c.source = L"文件拖入";
+        c.ts = (long long)time(nullptr);
+        c.body =
+            L"# 一级标题：卷宗编号 07\n"
+            L"## 二级标题：采集规范\n"
+            L"正文段落：从网页或资料里选中重点，**加粗强调**、*斜体补充*、"
+            L"`inline_code()`，以及[参考链接](https://example.com)。\n"
+            L"- 无序列表 · 采集要点一\n"
+            L"- 无序列表 · 采集要点二\n"
+            L"  - 嵌套条目（缩进两级）\n"
+            L"1. 有序步骤一\n"
+            L"2. 有序步骤二\n"
+            L"> 引用：保持初心，方得始终。\n"
+            L"---\n"
+            L"```cpp\nint main() {\n    return 0;   // 代码块\n}\n```\n"
+            L"结尾段落：阅读视图由自研 MarkdownView 渲染，可切回源码对照。";
+        m_cards.push_back(c);
+        // 不走 Reload()：它会重新 LoadKnowledge 覆盖示例卡；手动同步并行数组
+        m_expanded.assign(m_cards.size(), true);
+        m_md.assign(m_cards.size(), {});
+        m_mdMode.assign(m_cards.size(), true);
+        RecomputeLayout();
+    }
+    for (size_t i = 0; i < m_cards.size(); ++i) m_expanded[i] = true;
+    RecomputeLayout();
+    LogLine(L"[kb] DebugForcePreview done, cards=%d", (int)m_cards.size());
+}
+
 void KnowledgeView::Reload()
 {
     m_cards = CheckinStore::Instance().LoadKnowledge();
     m_expanded.assign(m_cards.size(), false);
+    m_md.assign(m_cards.size(), {});        // 阅读视图随卡片重建（Lazy 解析）
+    m_mdMode.assign(m_cards.size(), true);  // 默认阅读视图
     RecomputeLayout();
 }
 
@@ -56,6 +94,7 @@ void KnowledgeView::Layout(const D2D1_RECT_F& area, Canvas& cv)
     m_cardRects.clear();
     m_delRects.clear();
     m_expandRects.clear();
+    m_mdToggleRects.clear();
 
     TextStyle bodyTs; bodyTs.size = 13.0f; bodyTs.role = FontRole::Sans;
 
@@ -64,15 +103,24 @@ void KnowledgeView::Layout(const D2D1_RECT_F& area, Canvas& cv)
     } else {
         for (size_t i = 0; i < m_cards.size(); ++i) {
             float maxW = w - 32.0f - 170.0f;   // 右侧留给按钮
-            float bodyH = m_expanded[i]
-                ? cv.MeasureHeight(m_cards[i].body.empty() ? L" " : m_cards[i].body, bodyTs, maxW)
-                : 38.0f;
+            // Markdown 阅读视图：首次展开前也预排版（Lazy——仅当卡内容非空）
+            if (m_md[i].Empty() && !m_cards[i].body.empty())
+                m_md[i].SetMarkdown(m_cards[i].body);
+            float bodyH;
+            if (m_expanded[i]) {
+                bodyH = (m_mdMode[i] && !m_md[i].Empty())
+                      ? m_md[i].Layout(maxW, cv) + 6.0f
+                      : cv.MeasureHeight(m_cards[i].body.empty() ? L" " : m_cards[i].body, bodyTs, maxW);
+            } else {
+                bodyH = 38.0f;
+            }
             float h = 16.0f /*top*/ + 26.0f /*title*/ + 18.0f /*meta*/ + 10.0f + bodyH + 14.0f /*bottom*/;
             D2D1_RECT_F r = v.block(h);
             m_cardRects.push_back(r);
             float bw = 70.0f, bh = 30.0f;
             m_delRects.push_back(ui::MakeRect(r.right - bw - 14.0f, r.top + 14.0f, bw, bh));
             m_expandRects.push_back(ui::MakeRect(r.right - 2.0f * bw - 24.0f, r.top + 14.0f, bw, bh));
+            m_mdToggleRects.push_back(ui::MakeRect(r.right - 3.0f * bw - 34.0f, r.top + 14.0f, bw, bh));
         }
     }
     SetContentHeight((v.bottom() - area.top) + 40.0f);
@@ -102,6 +150,11 @@ void KnowledgeView::Update(float dt, const Input& in)
             }
             if (InRect(m_expandRects[i], mx, my)) {
                 m_expanded[i] = !m_expanded[i];
+                RecomputeLayout();
+                return;
+            }
+            if (InRect(m_mdToggleRects[i], mx, my)) {
+                m_mdMode[i] = !m_mdMode[i];   // 阅读视图 ⇄ 源码
                 RecomputeLayout();
                 return;
             }
@@ -192,7 +245,13 @@ void KnowledgeView::PaintCard(Canvas& cv, const KCard& c, bool expanded,
     TextStyle bs; bs.size = 13.0f; bs.role = FontRole::Sans;
     float by = r.top + 66.0f;
     if (expanded) {
-        cv.Text(c.body, { padL, by, padL + maxW, r.bottom - 14.0f }, bs, pal.ink700);
+        bool md = (m_mdMode[idx] && idx < (int)m_md.size() && !m_md[idx].Empty());
+        if (md) {
+            // Obsidian 式阅读视图（渲染标题 / 列表 / 粗体 / 代码块…）
+            m_md[idx].Paint(cv, padL, by, by - 2.0f, r.bottom + 400.0f);
+        } else {
+            cv.Text(c.body, { padL, by, padL + maxW, r.bottom - 14.0f }, bs, pal.ink700);
+        }
     } else {
         cv.Text(c.body, { padL, by, padL + maxW, by + 38.0f }, bs, pal.ink500);
     }
@@ -200,6 +259,9 @@ void KnowledgeView::PaintCard(Canvas& cv, const KCard& c, bool expanded,
     cv.PopClip();
 
     PaintButton(cv, m_expandRects[idx], expanded ? L"收起" : L"展开", pal.paperDeep, pal.ink700);
+    if (expanded)
+        PaintButton(cv, m_mdToggleRects[idx],
+                    (m_mdMode[idx] ? L"源码" : L"阅读"), pal.paperDeep, pal.ink700);
     PaintButton(cv, m_delRects[idx], L"删除", pal.vermWash, pal.vermilion);
 }
 
