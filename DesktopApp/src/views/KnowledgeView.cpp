@@ -78,7 +78,29 @@ void KnowledgeView::Reload()
 
 void KnowledgeView::RecomputeLayout()
 {
+    SyncArrays();
     if (m_cv) Layout(m_area, *m_cv);
+}
+
+// 并行数组与 m_cards 对齐（防越界：任何路径改了卡片数，这里兜底重建）
+void KnowledgeView::SyncArrays()
+{
+    const size_t n = m_cards.size();
+    if (m_expanded.size() != n) {
+        std::vector<bool> oldE = std::move(m_expanded);
+        m_expanded.assign(n, false);
+        for (size_t i = 0; i < n && i < oldE.size(); ++i) m_expanded[i] = oldE[i];
+    }
+    if (m_mdMode.size() != n) {
+        std::vector<bool> oldM = std::move(m_mdMode);
+        m_mdMode.assign(n, true);
+        for (size_t i = 0; i < n && i < oldM.size(); ++i) m_mdMode[i] = oldM[i];
+    }
+    if (m_md.size() != n) {
+        m_md.assign(n, {});
+        for (size_t i = 0; i < n && i < m_cards.size(); ++i)
+            if (!m_cards[i].body.empty()) m_md[i].SetMarkdown(m_cards[i].body);
+    }
 }
 
 void KnowledgeView::Layout(const D2D1_RECT_F& area, Canvas& cv)
@@ -129,6 +151,7 @@ void KnowledgeView::Layout(const D2D1_RECT_F& area, Canvas& cv)
 void KnowledgeView::Update(float dt, const Input& in)
 {
     if (m_toast) { m_toastT += dt; if (m_toastT > 2.4f) m_toast = false; }
+    SyncArrays();   // 防越界兜底（云同步/拖入等任何改卡路径）
 
     // F-D5+：拖入收集反馈——版本号变化 = 刚收集成功 → 刷新+Toast；
     // 拖拽悬停中 → Paint 画高亮蒙层

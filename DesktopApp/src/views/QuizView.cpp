@@ -835,10 +835,11 @@ void QuizView::PaintModal(Canvas& cv)
 
     for (size_t i = 0; i < m_ansSquares.size(); ++i) {
         const auto& r = m_ansSquares[i];
-        bool answered = !m_sel[i].empty();
+        bool answered = (i < m_sel.size()) && !m_sel[i].empty();
         D2D1_COLOR_F fill, border, fg;
         if (m_submitted) {
-            if (m_correct[i]) { fill = WithAlpha(pal.jade, 0.85f); border = pal.jade; fg = pal.paperHi; }
+            // 防御：m_correct 与题数未同步（状态清理时序）时按未答处理，不越界
+            if (i < m_correct.size() && m_correct[i]) { fill = WithAlpha(pal.jade, 0.85f); border = pal.jade; fg = pal.paperHi; }
             else              { fill = WithAlpha(pal.vermilion, 0.85f); border = pal.vermilion; fg = pal.paperHi; }
         } else if (answered) { fill = WithAlpha(pal.seal, 0.18f); border = pal.seal; fg = pal.seal; }
         else                 { fill = WithAlpha(pal.ink300, 0.16f); border = pal.rule; fg = pal.ink500; }

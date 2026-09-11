@@ -44,7 +44,7 @@ private:
     ~TrayIcon() { Destroy(); }
 
     static LRESULT CALLBACK WndProcStatic(HWND, UINT, WPARAM, LPARAM);
-    LRESULT WndProc(UINT msg, WPARAM wp, LPARAM lp);
+    LRESULT WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
     void ShowContextMenu();
     HICON CreateSealIcon();
 

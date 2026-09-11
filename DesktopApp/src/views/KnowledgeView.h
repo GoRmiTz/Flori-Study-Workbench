@@ -30,6 +30,7 @@ public:
 private:
     void Reload();
     void RecomputeLayout();
+    void SyncArrays();   // 并行数组（expanded/mdMode/md）与 m_cards 对齐，防越界
     void PaintCard(Canvas& cv, const KCard& c, bool expanded, const D2D1_RECT_F& r, int idx);
     void PaintButton(Canvas& cv, const D2D1_RECT_F& r, const std::wstring& label,
                      const D2D1_COLOR_F& bg, const D2D1_COLOR_F& fg);

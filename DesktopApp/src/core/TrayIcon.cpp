@@ -70,11 +70,11 @@ LRESULT CALLBACK TrayIcon::WndProcStatic(HWND hwnd, UINT msg, WPARAM wp, LPARAM 
     } else {
         self = reinterpret_cast<TrayIcon*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
     }
-    if (self) return self->WndProc(msg, wp, lp);
+    if (self) return self->WndProc(hwnd, msg, wp, lp);
     return DefWindowProcW(hwnd, msg, wp, lp);
 }
 
-LRESULT TrayIcon::WndProc(UINT msg, WPARAM wp, LPARAM lp)
+LRESULT TrayIcon::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
     switch (msg) {
     case WM_TRAY_CALLBACK:
@@ -107,11 +107,15 @@ LRESULT TrayIcon::WndProc(UINT msg, WPARAM wp, LPARAM lp)
         // DestroyWindow 已会同步触发 WM_DESTROY，重入会二次销毁同一窗口。
         return 0;
     }
-    return DefWindowProcW(m_hwnd, msg, wp, lp);
+    // 注意：必须用消息携带的 hwnd——WM_NCCREATE 等创建期消息到达时
+    // m_hwnd 成员尚未赋值，传 nullptr 会导致 DefWindowProc 返回失败，
+    // 进而 CreateWindowExW 报 err=1400（托盘窗口永远建不出来）。
+    return DefWindowProcW(hwnd, msg, wp, lp);
 }
 
 bool TrayIcon::Create(HWND owner, HINSTANCE hInst, const wchar_t* tip)
 {
+    LogLine(L"[tray] Create begin (hwnd existed: %d)", m_hwnd ? 1 : 0);
     if (m_hwnd) return true;
     m_owner = owner;
 
@@ -120,11 +124,21 @@ bool TrayIcon::Create(HWND owner, HINSTANCE hInst, const wchar_t* tip)
     wc.lpfnWndProc = &TrayIcon::WndProcStatic;
     wc.hInstance = hInst;
     wc.lpszClassName = kTrayClassName;
-    RegisterClassExW(&wc);
+    if (!RegisterClassExW(&wc)) {
+        DWORD e = GetLastError();
+        if (e != ERROR_CLASS_ALREADY_EXISTS)
+            LogLine(L"[tray] RegisterClassExW 失败 err=%lu", e);
+    }
 
-    m_hwnd = CreateWindowExW(0, kTrayClassName, L"FloriTray", 0,
-                             0, 0, 0, 0, HWND_MESSAGE, nullptr, hInst, this);
-    if (!m_hwnd) return false;
+    m_hwnd = CreateWindowExW(WS_EX_TOOLWINDOW,
+                             kTrayClassName, L"FloriTray", WS_POPUP,
+                             -32000, -32000, 1, 1, nullptr, nullptr, hInst, this);
+    if (!m_hwnd) {
+        LogLine(L"[tray] 窗口创建失败 err=%lu", GetLastError());
+        return false;
+    }
+    // 常驻隐藏：不显示窗口本体（收托盘消息 + 气泡由 NIF_ICON 承载）
+    ShowWindow(m_hwnd, SW_HIDE);
 
     m_icon = CreateSealIcon();
     m_nid = new NOTIFYICONDATAW{};
@@ -146,6 +160,7 @@ bool TrayIcon::Create(HWND owner, HINSTANCE hInst, const wchar_t* tip)
     // 启用 V4 行为（气泡提示 NIF_INFO、Aero Peek 等需要）
     m_nid->uVersion = 4;
     Shell_NotifyIconW(NIM_SETVERSION, m_nid);
+    LogLine(L"[tray] Shell_NotifyIcon OK（托盘图标已常驻；Win11 默认收在任务栏角溢出 ^ 内）");
     return true;
 }
 
