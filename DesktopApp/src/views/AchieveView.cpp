@@ -256,6 +256,13 @@ void AchieveView::DebugForcePreview()
     }
 }
 
+// 截图自检：契约页 + 打开「新建契约」面板，核对编辑面板排版
+void AchieveView::DebugForceOpen()
+{
+    DebugForcePreview();
+    m_editingPact = true;
+}
+
 // ---------------- 布局 ----------------
 void AchieveView::Layout(const D2D1_RECT_F& area, Canvas& cv)
 {
@@ -270,12 +277,13 @@ void AchieveView::Layout(const D2D1_RECT_F& area, Canvas& cv)
 
     lj::ui::VLayout flow(x0, area.top + 24.0f, contentW, 0.0f);
 
-    // 顶部分段切换
+    // 顶部分段切换（tab 高 44，下方留 36px 给 SECTION 小标题，避免与内容重叠）
     {
         const float tabH = 44.0f;
-        D2D1_RECT_F tabBlock = flow.block(tabH + 24.0f);
+        D2D1_RECT_F tabBlock = flow.block(tabH);
         m_tabF3.bounds = { x0, tabBlock.top, x0 + contentW * 0.5f, tabBlock.top + tabH };
         m_tabF4.bounds = { x0 + contentW * 0.5f, tabBlock.top, x0 + contentW, tabBlock.top + tabH };
+        flow.block(36.0f);   // SECTION 标题区
     }
 
     if (m_tab == 0) {
@@ -322,13 +330,14 @@ void AchieveView::Layout(const D2D1_RECT_F& area, Canvas& cv)
         }
 
         // F-D4 申论字数统计卡
+        // F-D4 申论字数统计卡（按钮放 SECTION 标题行右端，说明文字独占一行，不再互相压盖）
         {
             float innerH = m_docxOk ? 96.0f : 88.0f;
             D2D1_RECT_F cb = flow.block(innerH + 24.0f);
             m_docxCard = { x0, cb.top + 8.0f, x0 + contentW, cb.top + 8.0f + innerH };
             float bx = m_docxCard.left + 26.0f, br = m_docxCard.right - 26.0f;
-            m_docxBtnRect    = { bx, m_docxCard.top + 46.0f, bx + 176.0f, m_docxCard.top + 82.0f };
-            m_docxRevokeRect = { br - 96.0f, m_docxCard.top + 46.0f, br, m_docxCard.top + 82.0f };
+            m_docxBtnRect    = { br - 176.0f, m_docxCard.top + 12.0f, br, m_docxCard.top + 44.0f };
+            m_docxRevokeRect = { br - 96.0f,  m_docxCard.top + 12.0f, br, m_docxCard.top + 44.0f };
         }
 
         {
@@ -345,20 +354,25 @@ void AchieveView::Layout(const D2D1_RECT_F& area, Canvas& cv)
     } else {
         // ---- F4 契约 ----
         {
-            D2D1_RECT_F aBlock = flow.block(44.0f + 18.0f);
-            m_newPactBtn.bounds = { x0, aBlock.top, x0 + 160.0f, aBlock.top + 44.0f };
+            D2D1_RECT_F aBlock = flow.block(30.0f + 44.0f);   // SECTION 小标题 + 按钮
+            m_newPactBtn.bounds = { x0, aBlock.top + 30.0f, x0 + 160.0f, aBlock.top + 74.0f };
         }
 
         if (m_editingPact) {
-            D2D1_RECT_F pBlock = flow.block(268.0f + 50.0f + 24.0f);
+            // 编辑面板：名称 / 规则 / 两组步进器（− + 相邻，数值紧随其后，
+            // 全部收在面板内边距之内——旧版按钮左右分离、数值超出面板右缘）
+            const float panelH = 292.0f;
+            D2D1_RECT_F pBlock = flow.block(panelH + 50.0f + 24.0f);
             float panelTop = pBlock.top;
-            float panelH = 268.0f;
-            m_pactNameRect = { ix, panelTop + 44.0f, right, panelTop + 80.0f };
-            m_pactRuleRect = { ix, panelTop + 124.0f, right, panelTop + 168.0f };
-            m_pactDaysMinus.bounds = { ix, panelTop + 196.0f, ix + 40.0f, panelTop + 236.0f };
-            m_pactDaysPlus.bounds  = { ix + 100.0f, panelTop + 196.0f, ix + 140.0f, panelTop + 236.0f };
-            m_pactTargetMinus.bounds = { right - 140.0f, panelTop + 196.0f, right - 100.0f, panelTop + 236.0f };
-            m_pactTargetPlus.bounds  = { right - 40.0f, panelTop + 196.0f, right, panelTop + 236.0f };
+            m_pactNameRect = { ix, panelTop + 62.0f, right, panelTop + 98.0f };
+            m_pactRuleRect = { ix, panelTop + 140.0f, right, panelTop + 176.0f };
+            // 持续天数（左半）：label 190 / 按钮 208-248 / 数值 208-248
+            m_pactDaysMinus.bounds = { ix, panelTop + 208.0f, ix + 40.0f, panelTop + 248.0f };
+            m_pactDaysPlus.bounds  = { ix + 46.0f, panelTop + 208.0f, ix + 86.0f, panelTop + 248.0f };
+            // 每日目标（右半，与左半同高）
+            float tx = ix + (right - ix) * 0.5f;
+            m_pactTargetMinus.bounds = { tx, panelTop + 208.0f, tx + 40.0f, panelTop + 248.0f };
+            m_pactTargetPlus.bounds  = { tx + 46.0f, panelTop + 208.0f, tx + 86.0f, panelTop + 248.0f };
             m_createPactBtn.bounds = { ix, panelTop + panelH + 8.0f, ix + 130.0f, panelTop + panelH + 50.0f };
             m_cancelPactBtn.bounds = { ix + 142.0f, panelTop + panelH + 8.0f, ix + 252.0f, panelTop + panelH + 50.0f };
 
@@ -393,7 +407,8 @@ void AchieveView::Layout(const D2D1_RECT_F& area, Canvas& cv)
             float total = 0.0f;
             for (int i = 0; i < n; ++i)
                 total += headH + (m_pacts[i].members.empty() ? 0.0f : mateH) + 14.0f;
-            D2D1_RECT_F listBlock = flow.block((std::max)(10.0f, total));
+            // 无契约时给空态文案留 66px，避免与「返回首页」按钮重叠
+            D2D1_RECT_F listBlock = flow.block((std::max)(66.0f, total));
             float y = listBlock.top;
             for (int i = 0; i < n; ++i) {
                 const auto& p = m_pacts[i];
@@ -727,11 +742,11 @@ void AchieveView::PaintF3(Canvas& cv)
         TextStyle fs2; fs2.role = FontRole::Mono; fs2.size = 10.5f; fs2.letterSpacing = 2.0f; fs2.weight = DWRITE_FONT_WEIGHT_BOLD;
         cv.Text(L"SECTION · 今日时间分布", { fx, m_focusCard.top + 16.0f, fr, m_focusCard.top + 34.0f }, fs2, pal.ink300);
 
-        // 两条迷你条：学习 / 娱乐降权
+        // 两条迷你条：学习 / 娱乐降权（条右侧留 64px 画数值，不出卡片）
         auto bar = [&](float y, const std::wstring& label, int val, D2D1_COLOR_F col) {
             TextStyle ls; ls.role = FontRole::Sans; ls.size = 11.0f; ls.vAlign = VAlign::Middle;
             cv.Text(label, { fx, y, fx + 70.0f, y + 18.0f }, ls, pal.ink500);
-            float bx = fx + 76.0f, bw = fr - bx;
+            float bx = fx + 76.0f, bw = (fr - bx) - 64.0f;
             cv.FillRoundRect({ bx, y + 4.0f, bx + bw, y + 14.0f }, 5.0f, pal.paperLo);
             int maxv = (std::max)(1, (std::max)(m_todayFocus, m_todayEnt));
             float ratio = (float)val / (float)maxv;
@@ -962,11 +977,11 @@ void AchieveView::PaintF4(Canvas& cv)
         }
     }
 
-    if (m_pactRects.empty()) {
+    if (m_pactRects.empty() && !m_editingPact) {
         TextStyle es2; es2.role = FontRole::Sans; es2.size = 13.0f;
         cv.Text(L"还没有契约。点「＋ 新建契约」定一个期限 + 规则的自律约定，"
                 L"再用「＋ 邀请队友」拉上同伴一起打卡（队友进度本地记录）。",
-                { m_tabF3.bounds.left + 26.0f, m_newPactBtn.bounds.bottom + 30.0f, m_tabF3.bounds.right - 26.0f, m_newPactBtn.bounds.bottom + 54.0f }, es2, pal.ink500);
+                { m_tabF3.bounds.left + 26.0f, m_newPactBtn.bounds.bottom + 26.0f, m_tabF3.bounds.right - 26.0f, m_newPactBtn.bounds.bottom + 52.0f }, es2, pal.ink500);
     }
 
     m_backBtn.Paint(cv);

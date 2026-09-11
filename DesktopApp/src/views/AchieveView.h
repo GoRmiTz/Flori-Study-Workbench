@@ -47,7 +47,8 @@ public:
     void Layout(const D2D1_RECT_F& area, Canvas& cv) override;
     void Update(float dt, const Input& in) override;
     void Paint(Canvas& cv) override;
-    void DebugForcePreview() override;   // 截图自检：切到「契约·组队」页
+    void DebugForceOpen() override;      // 截图自检：切到「契约·组队」并打开新建面板
+    void DebugForcePreview() override;   // 截图自检：切到「契约·组队」列表页
 
 private:
     // ---- F3 数据 ----
