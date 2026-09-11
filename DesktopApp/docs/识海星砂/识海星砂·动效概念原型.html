@@ -1,0 +1,716 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>识海 · 星砂 · 掌握图谱</title>
+<style>
+  :root{
+    --bg0:#06090c; --ink:#cdd8e0; --ink-dim:#7c8a96; --gold:#d8b25a;
+    --panel:rgba(13,19,24,.82); --line:rgba(140,180,200,.16);
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%;overflow:hidden;background:var(--bg0);
+    font-family:-apple-system,"PingFang SC","Microsoft YaHei",system-ui,sans-serif;color:var(--ink);
+    -webkit-user-select:none;user-select:none;}
+  #c{display:block;position:fixed;inset:0;width:100vw;height:100vh;cursor:crosshair;}
+  /* 顶栏 chrome（mock 真实界面） */
+  .chrome{position:fixed;top:0;left:0;right:0;height:46px;display:flex;align-items:center;
+    padding:0 16px;gap:18px;background:rgba(8,12,15,.72);backdrop-filter:blur(8px);
+    border-bottom:1px solid rgba(150,200,220,.10);z-index:5;}
+  .brand{font-size:14px;letter-spacing:.18em;color:#8fd9e8;font-weight:600;}
+  .tabs{display:flex;gap:4px;}
+  .tab{font-size:12.5px;padding:5px 12px;border-radius:7px;color:#8b9794;cursor:pointer;}
+  .tab.on{color:#06121a;background:#7fd9e8;}
+  .tab:hover{color:#cfe9e2;}
+  .spacer{flex:1;}
+  .ava{width:26px;height:26px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#7fd9e8,#27514f);
+    border:1px solid rgba(127,217,232,.4);}
+  /* 标题 */
+  .title{position:fixed;top:56px;left:18px;z-index:4;pointer-events:none;}
+  .title h1{margin:0;font-size:19px;font-weight:600;letter-spacing:.14em;color:#dff3f7;}
+  .title p{margin:3px 0 0;font-size:11.5px;color:#6f7e7b;letter-spacing:.03em;}
+  /* 顶部 KPI */
+  .kpi{position:fixed;top:56px;right:14px;z-index:4;display:flex;gap:8px;pointer-events:none;flex-wrap:wrap;justify-content:flex-end;max-width:430px;}
+  .tile{background:rgba(13,19,21,.66);border:1px solid rgba(150,200,220,.12);border-radius:11px;
+    padding:7px 12px;min-width:60px;text-align:center;}
+  .tile .v{font-size:17px;font-weight:600;color:#bfeee3;line-height:1.1;}
+  .tile .l{font-size:10px;color:#7d8a87;margin-top:2px;letter-spacing:.04em;}
+  /* 悬停探针面板 */
+  .tip{position:fixed;z-index:6;pointer-events:none;background:rgba(10,15,18,.92);
+    border:1px solid rgba(150,200,220,.22);border-radius:10px;padding:9px 11px;min-width:160px;
+    box-shadow:0 8px 26px rgba(0,0,0,.5);display:none;}
+  .tip .nm{font-size:13px;color:#eaf6f2;font-weight:600;margin-bottom:5px;}
+  .tip .row{display:flex;justify-content:space-between;font-size:11.5px;color:#9fb0ac;margin:2px 0;}
+  .tip .row b{color:#cfe9e2;font-weight:600;}
+  .swatch{display:inline-block;width:10px;height:10px;border-radius:50%;vertical-align:-1px;margin-right:5px;}
+  /* 颜色图例 */
+  .legend{position:fixed;left:18px;bottom:16px;z-index:5;background:var(--panel);
+    border:1px solid var(--line);border-radius:10px;padding:9px 11px;font-size:11px;
+    color:var(--ink-dim);line-height:1.7;backdrop-filter:blur(6px);max-width:248px;}
+  .legend b{color:var(--ink);font-weight:600;}
+  .legend .rar{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:4px;vertical-align:-1px;}
+
+  /* scrim（拖卡收集时背景变暗，叠笺错题栏语汇） */
+  .scrim{position:fixed;inset:0;background:rgba(2,5,8,.5);z-index:8;opacity:0;pointer-events:none;
+    transition:opacity .35s ease;}
+  .scrim.on{opacity:1;}
+
+  /* 图谱面板（收藏家横排叠卡，叠笺式显隐） */
+  #atlas{position:fixed;top:56px;right:14px;width:200px;bottom:16px;z-index:9;
+    background:var(--panel);border:1px solid var(--line);border-radius:14px;
+    padding:10px 10px 12px;backdrop-filter:blur(8px);display:flex;flex-direction:column;
+    transform:translateX(118%);opacity:0;
+    transition:transform .42s cubic-bezier(.2,.85,.25,1), opacity .3s ease, border-color .2s, box-shadow .2s;}
+  #atlas.on{transform:translateX(0);opacity:1;}
+  #atlas.hot{border-color:var(--gold);box-shadow:0 0 0 2px rgba(216,178,90,.28) inset;}
+  #atlas h3{font-size:12px;letter-spacing:.32em;color:#8fd9e8;text-align:center;margin-bottom:3px;font-weight:600;}
+  #atlasClose{position:absolute;top:8px;right:10px;width:22px;height:22px;border:none;border-radius:6px;
+    background:rgba(255,255,255,.08);color:#cfe6ec;font-size:15px;line-height:1;cursor:pointer;}
+  #atlasClose:hover{background:rgba(255,255,255,.18);}
+  #atlas .count{font-size:10px;color:var(--ink-dim);text-align:center;margin-bottom:8px;}
+  #atlasList{flex:1;position:relative;overflow-x:auto;overflow-y:hidden;
+    border-top:1px solid rgba(150,200,220,.10);padding-top:10px;}
+  #atlasList .ribbon{position:relative;height:118px;}
+  .mini{position:absolute;top:18px;width:52px;height:84px;border-radius:9px;cursor:pointer;overflow:hidden;
+    background:linear-gradient(180deg, hsl(var(--h),40%,32%), hsl(var(--h),38%,12%));
+    border:1px solid rgba(255,255,255,.16);
+    box-shadow:0 5px 14px rgba(0,0,0,.5);
+    transition:transform .2s ease, filter .2s ease;}
+  .mini:hover{transform:translateY(-14px) scale(1.1);filter:brightness(1.28);z-index:6;}
+  .mini .cap{position:absolute;top:0;left:0;right:0;height:5px;background:hsl(var(--h),55%,55%);}
+  #atlas .hint{font-size:10px;color:var(--ink-dim);text-align:center;margin-top:8px;opacity:.85;}
+
+  /* 右侧边缘 tab（无按钮重开面板） */
+  #atlasTab{position:fixed;right:0;top:50%;transform:translateY(-50%);z-index:9;
+    width:22px;height:104px;border-radius:10px 0 0 10px;cursor:pointer;
+    background:rgba(13,19,24,.8);border:1px solid var(--line);border-right:none;
+    display:none;align-items:center;justify-content:center;
+    writing-mode:vertical-rl;font-size:11px;letter-spacing:.3em;color:#8fd9e8;
+    box-shadow:-4px 0 14px rgba(0,0,0,.4);transition:background .2s;}
+  #atlasTab.show{display:flex;}
+  #atlasTab:hover{background:rgba(30,40,48,.92);}
+
+  /* ===== 星卡 v2：正常考点卡 + 三按钮 + rotateY 翻面（弹簧弹入，不飞出/不漂浮） ===== */
+  #card{position:fixed;z-index:40;pointer-events:auto;
+    width:320px;height:240px;
+    left:50%;top:50%;margin-left:-160px;margin-top:-120px;
+    --hue:195;
+    opacity:0;display:none;will-change:transform,opacity;
+    transform:scale(.5);}
+  #card .flip{position:relative;width:100%;height:100%;transform-style:preserve-3d;
+    transition:transform .6s cubic-bezier(.4,.12,.2,1);}
+  #card.flipped .flip{transform:rotateY(180deg);}
+  #card .face{position:absolute;inset:0;backface-visibility:hidden;-webkit-backface-visibility:hidden;
+    border-radius:14px;overflow:hidden;
+    background:linear-gradient(158deg, hsla(var(--hue),44%,30%,.98), hsla(var(--hue),42%,8%,.99) 80%);
+    border:1px solid rgba(255,255,255,.14);
+    box-shadow:0 18px 52px rgba(0,0,0,.55);}
+  #card .face.back{transform:rotateY(180deg);}
+
+  /* 正面 */
+  #card .front .hd{position:absolute;top:0;left:0;right:0;padding:16px 18px 14px;
+    background:linear-gradient(180deg, hsla(var(--hue),58%,44%,.55), transparent);}
+  #card .front .hd .disc{font-size:16px;font-weight:600;color:#f2f8fb;letter-spacing:.04em;}
+  #card .front .hd .sub{font-size:11px;color:hsla(var(--hue),52%,84%,.92);margin-top:4px;letter-spacing:.08em;}
+  #card .front .info{position:absolute;left:18px;right:18px;top:82px;display:flex;gap:10px;}
+  #card .front .badge{flex:1;background:rgba(0,0,0,.22);border:1px solid rgba(255,255,255,.10);
+    border-radius:10px;padding:9px 11px;}
+  #card .front .badge .k{font-size:9.5px;color:#9fb2ba;letter-spacing:.12em;}
+  #card .front .badge .v{font-size:15px;color:#eaf3f7;font-weight:600;margin-top:2px;}
+  #card .front .bar{height:5px;border-radius:3px;background:rgba(255,255,255,.16);margin-top:8px;overflow:hidden;}
+  #card .front .bar i{display:block;height:100%;background:hsl(var(--hue),62%,66%);border-radius:3px;}
+  #card .front .btns{position:absolute;left:18px;right:18px;bottom:18px;display:flex;gap:9px;}
+  #card .front .btns button{flex:1;cursor:pointer;border:none;border-radius:10px;padding:10px 0;
+    font-size:12.5px;font-weight:600;color:#eaf6f9;letter-spacing:.05em;
+    background:hsla(var(--hue),56%,48%,.9);transition:filter .15s, transform .1s;}
+  #card .front .btns button:hover{filter:brightness(1.16);}
+  #card .front .btns button:active{transform:translateY(1px);}
+  #card .front .btns button.ghost{background:rgba(255,255,255,.12);color:#cfe6ec;}
+
+  /* 背面：真题 */
+  #card .back .pad{position:absolute;inset:22px 22px;z-index:5;overflow:auto;}
+  #card .back h4{margin:0 0 10px;font-size:11.5px;letter-spacing:.14em;color:hsl(var(--hue),66%,74%);font-weight:600;}
+  #card .back .q{font-size:13px;line-height:1.7;color:#e6eef4;white-space:pre-wrap;}
+  #card .back .meta{margin-top:12px;font-size:10.5px;color:hsla(var(--hue),45%,80%,.85);letter-spacing:.06em;}
+
+  .hint{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);z-index:5;
+    font-size:11px;color:var(--ink-dim);background:var(--panel);border:1px solid var(--line);
+    border-radius:20px;padding:6px 14px;backdrop-filter:blur(6px);pointer-events:none;text-align:center;}
+  .toast{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:50;
+    background:rgba(10,15,18,.92);border:1px solid rgba(150,200,220,.3);border-radius:12px;
+    padding:10px 18px;font-size:13px;color:#dff3f7;opacity:0;pointer-events:none;
+    transition:opacity .25s ease;letter-spacing:.05em;}
+  .toast.on{opacity:1;}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div class="chrome">
+  <div class="brand">芙洛理 · 识海</div>
+  <div class="tabs">
+    <div class="tab">知识库</div><div class="tab">练考</div><div class="tab">复盘</div>
+    <div class="tab on">识海</div>
+  </div>
+  <div class="spacer"></div>
+  <div class="ava"></div>
+</div>
+
+<div class="title">
+  <h1>识海 · 星砂</h1>
+  <p>每颗星 = 一个微观考点 · 色相=来源 · 纯度=难度 · 明暗=掌握 · 点星飞出星卡</p>
+</div>
+
+<div class="kpi" id="kpi">
+  <div class="tile"><div class="v" id="k-total">0</div><div class="l">星点总数</div></div>
+  <div class="tile"><div class="v" id="k-lit">0</div><div class="l">已点亮</div></div>
+  <div class="tile"><div class="v" id="k-rate">0%</div><div class="l">掌握率</div></div>
+  <div class="tile"><div class="v" id="k-avg">0%</div><div class="l">平均掌握</div></div>
+  <div class="tile"><div class="v" id="k-weak">—</div><div class="l">最暗星团</div></div>
+  <div class="tile"><div class="v" id="k-atlas">0</div><div class="l">图谱收藏</div></div>
+</div>
+
+<div class="tip" id="tip">
+  <div class="nm" id="t-nm">—</div>
+  <div class="row"><span>类型</span><b id="t-type">—</b></div>
+  <div class="row"><span>来源</span><b id="t-src">—</b></div>
+  <div class="row"><span>难度</span><b id="t-diff">—</b></div>
+  <div class="row"><span>掌握度</span><b id="t-m">—</b></div>
+</div>
+
+<div class="legend">
+  <b>颜色即信息</b><br>
+  <span class="swatch" style="background:hsl(195,70%,62%)"></span><b>色相</b> = 学科来源<br>
+  <span class="swatch" style="background:hsl(195,72%,40%)"></span><b>纯度</b> = 难度（越高越难）<br>
+  <span class="swatch" style="background:hsl(195,30%,74%)"></span><b>明暗</b> = 掌握度（越亮越熟）
+</div>
+
+<div class="scrim" id="scrim"></div>
+
+<div id="atlas">
+  <h3>图 谱</h3>
+  <button id="atlasClose">×</button>
+  <div class="count">已收藏 <span id="a-count">0</span> 张星卡</div>
+  <div id="atlasList"><div class="ribbon" id="ribbon"></div></div>
+  <div class="hint">拖星卡入此 · 或点「收入图谱」</div>
+</div>
+
+<div id="atlasTab">图 谱</div>
+
+<div id="card">
+  <div class="flip">
+    <div class="face front">
+      <div class="hd">
+        <div class="disc" id="cardDisc">判断推理</div>
+        <div class="sub" id="cardSub">逻辑判断</div>
+      </div>
+      <div class="info">
+        <div class="badge"><div class="k">难度</div><div class="v" id="cardDiff">中</div><div class="bar"><i id="cardDiffBar"></i></div></div>
+        <div class="badge"><div class="k">掌握度</div><div class="v" id="cardMas">62%</div></div>
+      </div>
+      <div class="btns">
+        <button id="btnLight">点亮</button>
+        <button id="btnAtlas" class="ghost">收入图谱</button>
+        <button id="btnFlip" class="ghost">翻面</button>
+      </div>
+    </div>
+    <div class="face back">
+      <div class="pad">
+        <h4 id="cardType">题型</h4>
+        <div class="q" id="cardQ">题面…</div>
+        <div class="meta" id="cardSrc">来源 · 难度 · 掌握度</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<div class="hint">点星弹出星卡 · 三按钮：点亮 / 收入图谱 / 翻面 · 拖卡入右侧图谱收藏 · 双击卡面或 L 点亮 · Esc 关闭</div>
+
+<script>
+"use strict";
+(function(){
+  const cv = document.getElementById('c');
+  const ctx = cv.getContext('2d');
+  let W=0,H=0,DPR=1,scale=1;
+  window.__err = null;
+  window.addEventListener('error', e=>{ window.__err = e.message; });
+
+  // ---- 确定性随机（LCG） ----
+  let _s = 20260816;
+  function rnd(){ _s = (_s*1103515245 + 12345) & 0x7fffffff; return _s/0x7fffffff; }
+  function gauss(){
+    let u=0,v=0; while(u===0)u=rnd(); while(v===0)v=rnd();
+    return Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v);
+  }
+
+  // ---- 学科（决定色相）+ 子类型 + 真题模板 ----
+  const DISC = [
+    { name:'言语理解', hue:195, sub:['逻辑填空','片段阅读','语句表达'], q:[
+      '依次填入划横线部分最恰当的一项是：在数字经济______的今天，传统行业正经历深刻______。',
+      '下列句子中，没有语病的一项是：',
+      '对这段文字概括最准确的是：' ] },
+    { name:'数量关系', hue:255, sub:['数字推理','数学运算'], q:[
+      '某工程队原计划 30 天完成，实际每天多干 20%，可提前几天完成？',
+      '数列 2, 6, 12, 20, 30, ? 的下一项是：',
+      '若 a+b=10, ab=21，则 a²+b² = ?' ] },
+    { name:'判断推理', hue:214, sub:['图形推理','定义判断','类比推理','逻辑判断'], q:[
+      '下列选项中，与「医生：医院」逻辑关系相同的是：',
+      '根据给出图形规律，问号处应填入：',
+      '下列属于有效类比推理的是：' ] },
+    { name:'资料分析', hue:165, sub:['文字资料','图表资料','综合资料'], q:[
+      '根据下表，2025 年 A 省 GDP 同比增长约：',
+      '图中所示五年间，增幅最大的是哪一年？',
+      '已知部分占总体的比例，求总量约为：' ] },
+    { name:'归纳概括', hue:38, sub:['审题立意','要点提炼','层次归纳'], q:[
+      '请概括给定资料中「基层治理」存在的主要问题（不超过 200 字）。',
+      '归纳该段文字的核心观点，分条列出。',
+      '提炼材料中的三个关键词并简要说明。' ] },
+    { name:'对策提出', hue:350, sub:['问题对策','可行对策','对策结构'], q:[
+      '针对材料中「停车难」问题，提出三条可行对策。',
+      '请就「优化营商环境」给出具体措施建议。',
+      '结合现实，为「乡村产业振兴」设计实施路径。' ] },
+    { name:'公文写作', hue:290, sub:['格式规范','行文逻辑','语言得体'], q:[
+      '请以市政府名义，起草一份《关于开展安全生产大检查的通知》提纲。',
+      '撰写一份「调研报告」的结构提纲，含格式要点。',
+      '指出下列公文在格式与用语上的不当之处。' ] },
+    { name:'常识判断', hue:130, sub:['政治常识','法律常识','经济常识','人文常识','科技常识'], q:[
+      '下列关于「新发展理念」表述正确的是：',
+      '根据《民法典》，下列属于可撤销民事法律行为的是：',
+      '下列关于我国宪法的表述，有误的是：' ] },
+  ];
+
+  // ---- 团中心（归一化，黄金角环布，全幅深底无框） ----
+  const N_PER = 46, SIGMA = 0.105, GA = 2.399963229;
+  const centers = DISC.map((d,i)=>{
+    const ang = i*GA;
+    const rad = 0.30 + 0.05*Math.sin(i*1.7);
+    return { name:d.name, cx:0.5+rad*Math.cos(ang), cy:0.5+rad*Math.sin(ang)*0.94 };
+  });
+
+  // ---- 生成星点 ----
+  const stars = [];
+  let idc = 0;
+  for(let di=0; di<DISC.length; di++){
+    const c = centers[di];
+    for(let k=0;k<N_PER;k++){
+      const nx = c.cx + gauss()*SIGMA;
+      const ny = c.cy + gauss()*SIGMA*0.96;
+      if(nx<0.04||nx>0.96||ny<0.10||ny>0.95){ k--; continue; }
+      const diff = rnd();                       // 难度 0..1
+      const mastered = rnd() < 0.42;
+      const m0 = mastered ? (0.78+rnd()*0.22) : (rnd()*0.34);
+      const subIdx = Math.floor(rnd()*DISC[di].sub.length);
+      const qIdx = Math.floor(rnd()*DISC[di].q.length);
+      stars.push({
+        id:idc++, di, subIdx, qIdx, nx, ny,
+        r: 1.1 + (1+Math.floor(rnd()*5))*0.42,
+        diff, mastered, target: mastered?1:0, m: m0, v:0,
+        phase: rnd()*6.283, name: c.name+'·'+(k+1)
+      });
+    }
+  }
+
+  // ---- 星座连线（团内最近邻 2 条） ----
+  const edges = [];
+  (function(){
+    for(let di=0; di<DISC.length; di++){
+      const idx = stars.map((s,i)=>i).filter(i=>stars[i].di===di);
+      for(const i of idx){
+        const a = stars[i];
+        const near=[];
+        for(const j of idx){ if(j===i)continue;
+          const d=(a.nx-stars[j].nx)**2+(a.ny-stars[j].ny)**2; near.push([d,j]); }
+        near.sort((p,q)=>p[0]-q[0]);
+        for(let t=0;t<2;t++) edges.push([di, i, near[t][1]]);
+      }
+    }
+  })();
+
+  // ---- 相机 ----
+  const cam = { zoom:1.18, ox:0, oy:0 };
+  function w2s(wx,wy){
+    return [ (wx-0.5)*cam.zoom*scale + W/2 + cam.ox,
+             (wy-0.5)*cam.zoom*scale + H/2 + cam.oy ];
+  }
+  function s2w(sx,sy){
+    return [ (sx - W/2 - cam.ox)/(cam.zoom*scale) + 0.5,
+             (sy - H/2 - cam.oy)/(cam.zoom*scale) + 0.5 ];
+  }
+
+  // ---- 三通道颜色：色相=学科 纯度=难度 明暗=掌握 ----
+  function col(s, a){
+    const h = DISC[s.di].hue;
+    const sat = 20 + 54*s.diff;
+    const lig = 15 + 62*s.m;
+    return 'hsla('+h.toFixed(0)+','+sat.toFixed(0)+'%,'+lig.toFixed(0)+'%,'+a+')';
+  }
+
+  // (v2 回退：已移除稀有度光晕与抽卡分层)
+
+  // ---- 交互状态 ----
+  let hoverId = -1, userActed = false, frames = 0;
+  let dragId = null, downX=0, downY=0, moved=0, downOK=false;
+  let curStar = null, curTiltMax = 0;
+  const collected = new Set();
+
+  function nearest(sx,sy){
+    let best=-1, bd=18*18;
+    for(const s of stars){
+      const [px,py]=w2s(s.nx,s.ny);
+      const d=(px-sx)**2+(py-sy)**2;
+      if(d<bd){ bd=d; best=s.id; }
+    }
+    return best;
+  }
+
+  // ---- 自动演示（交互即停；非 idle 漂浮） ----
+  let focusCl = 0, lastSwitch = 0;
+  function autoDemo(now){
+    if(userActed) return;
+    if(now - lastSwitch > 2600){ lastSwitch = now; focusCl = (focusCl+1)%centers.length; }
+  }
+
+  // ---- 绘制 ----
+  function draw(now){
+    frames++;
+    const g = ctx.createRadialGradient(W/2,H*0.46,0, W/2,H*0.46, Math.max(W,H)*0.72);
+    g.addColorStop(0,'#0e171b'); g.addColorStop(0.55,'#0a1013'); g.addColorStop(1,'#06090a');
+    ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+
+    autoDemo(now);
+    if(!userActed){
+      const c = centers[focusCl];
+      const [cx,cy]=w2s(c.cx,c.cy);
+      const ft = (now - lastSwitch)/2600;
+      const rr = (0.6+0.4*Math.sin(ft*Math.PI*2))*SIGMA*cam.zoom*scale*2.1;
+      ctx.beginPath(); ctx.arc(cx,cy,rr,0,Math.PI*2);
+      ctx.strokeStyle='rgba(150,200,220,0.12)'; ctx.lineWidth=1; ctx.stroke();
+    }
+
+    // 星座连线
+    ctx.lineWidth=0.6;
+    for(const [di,a,b] of edges){
+      const sa=stars[a], sb=stars[b];
+      const [ax,ay]=w2s(sa.nx,sa.ny), [bx,by]=w2s(sb.nx,sb.ny);
+      const hot = (hoverId===sa.id||hoverId===sb.id);
+      const h = DISC[di].hue;
+      ctx.strokeStyle = hot
+        ? 'hsla('+h+',55%,70%,0.5)'
+        : 'hsla('+h+',40%,55%,0.07)';
+      ctx.beginPath(); ctx.moveTo(ax,ay); ctx.lineTo(bx,by); ctx.stroke();
+    }
+
+    // 星点
+    for(const s of stars){
+      const [px,py]=w2s(s.nx,s.ny);
+      const rad = s.r*cam.zoom*0.85;
+      const tw = 0.80 + 0.20*Math.sin(now*0.0012 + s.phase);
+      const hot = (hoverId===s.id);
+      ctx.beginPath(); ctx.arc(px,py,rad,0,Math.PI*2);
+      ctx.fillStyle = col(s, hot?1:tw); ctx.fill();
+      if(s.target>0.5){
+        ctx.beginPath(); ctx.arc(px,py,rad+1.6,0,Math.PI*2);
+        ctx.strokeStyle='rgba(235,250,255,0.55)'; ctx.lineWidth=0.8; ctx.stroke();
+      }
+      if(hot){
+        ctx.strokeStyle='rgba(220,250,255,0.85)'; ctx.lineWidth=1;
+        ctx.beginPath(); ctx.arc(px,py,rad+5,0,Math.PI*2); ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(px-rad-9,py); ctx.lineTo(px-rad-3,py);
+        ctx.moveTo(px+rad+3,py); ctx.lineTo(px+rad+9,py);
+        ctx.moveTo(px,py-rad-9); ctx.lineTo(px,py-rad-3);
+        ctx.moveTo(px,py+rad+3); ctx.lineTo(px,py+rad+9);
+        ctx.stroke();
+      }
+    }
+
+    // 弹簧推进掌握度
+    const K=0.12, D=0.78;
+    for(const s of stars){
+      s.v += (s.target - s.m)*K; s.v *= D; s.m += s.v;
+      if(s.m<0)s.m=0; if(s.m>1)s.m=1;
+    }
+    updateKPI();
+    requestAnimationFrame(draw);
+  }
+
+  // ---- KPI ----
+  function updateKPI(){
+    let lit=0, sum=0; const byCl = DISC.map(()=>[0,0]);
+    for(const s of stars){
+      if(s.target>0.5) lit++;
+      sum += s.m; byCl[s.di][0]+=s.m; byCl[s.di][1]++;
+    }
+    const total=stars.length;
+    let weakI=0, weakV=2;
+    byCl.forEach((c,i)=>{ const a=c[0]/c[1]; if(a<weakV){weakV=a;weakI=i;} });
+    document.getElementById('k-total').textContent=total;
+    document.getElementById('k-lit').textContent=lit;
+    document.getElementById('k-rate').textContent=Math.round(lit/total*100)+'%';
+    document.getElementById('k-avg').textContent=Math.round(sum/total*100)+'%';
+    document.getElementById('k-weak').textContent=DISC[weakI].name;
+    document.getElementById('k-atlas').textContent=collected.size;
+    document.getElementById('a-count').textContent=collected.size;
+  }
+
+  // ---- 悬停探针 ----
+  const tip=document.getElementById('tip');
+  function diffLabel(d){ return d<0.34?'易':d<0.67?'中':'难'; }
+  function updatePanel(){
+    if(hoverId<0){ tip.style.display='none'; return; }
+    const s=stars[hoverId];
+    const h=DISC[s.di].hue;
+    document.getElementById('t-nm').innerHTML='<span class="swatch" style="background:hsl('+h+','+(20+54*s.diff).toFixed(0)+'%,'+(15+62*s.m).toFixed(0)+'%)"></span>'+s.name;
+    document.getElementById('t-type').textContent=DISC[s.di].sub[s.subIdx];
+    document.getElementById('t-src').textContent=DISC[s.di].name;
+    document.getElementById('t-diff').textContent=diffLabel(s.diff);
+    document.getElementById('t-m').textContent=Math.round(s.m*100)+'%';
+    const [px,py]=w2s(s.nx,s.ny);
+    let x=px+14, y=py-10;
+    if(x>W-190) x=px-184; if(y<60) y=60; if(y>H-140) y=H-140;
+    tip.style.left=x+'px'; tip.style.top=y+'px';
+    tip.style.display='block';
+  }
+
+  // ---- 星卡 v2：正常考点卡 + 三按钮 + rotateY 翻面（弹簧弹入，不飞出/不漂浮） ----
+  const card=document.getElementById('card');
+  const scrim=document.getElementById('scrim');
+  const atlas=document.getElementById('atlas');
+  const atlasTab=document.getElementById('atlasTab');
+  const ribbon=document.getElementById('ribbon');
+  const toastEl=document.getElementById('toast');
+  const btnLight=document.getElementById('btnLight');
+  const btnAtlas=document.getElementById('btnAtlas');
+  const btnFlip=document.getElementById('btnFlip');
+  const atlasClose=document.getElementById('atlasClose');
+
+  function showToast(t){
+    toastEl.textContent=t; toastEl.classList.add('on');
+    clearTimeout(showToast._t); showToast._t=setTimeout(()=>toastEl.classList.remove('on'),1400);
+  }
+
+  function openCard(s, sx, sy){
+    curStar = s;
+    const h=DISC[s.di].hue;
+    card.style.setProperty('--hue', h);
+    document.getElementById('cardDisc').textContent = DISC[s.di].name;
+    document.getElementById('cardSub').textContent = DISC[s.di].sub[s.subIdx];
+    document.getElementById('cardDiff').textContent = diffLabel(s.diff);
+    document.getElementById('cardDiffBar').style.width = Math.round(s.diff*100)+'%';
+    document.getElementById('cardMas').textContent = Math.round(s.m*100)+'%';
+    document.getElementById('cardType').textContent = DISC[s.di].sub[s.subIdx];
+    document.getElementById('cardQ').textContent = DISC[s.di].q[s.qIdx];
+    document.getElementById('cardSrc').textContent = DISC[s.di].name+' · '+diffLabel(s.diff)+' · 掌握'+Math.round(s.m*100)+'%';
+    card.classList.remove('flipped');
+    // 弹簧弹入（cubic-bezier 过冲），v2 风格：不飞出、不翻转、不漂浮
+    card.style.display='block';
+    card.style.transition='none';
+    card.style.transform='scale(.5)';
+    card.style.opacity='0';
+    void card.offsetWidth;
+    card.style.transition='transform .5s cubic-bezier(.34,1.5,.5,1), opacity .3s ease';
+    card.style.transform='scale(1)';
+    card.style.opacity='1';
+  }
+  function closeCard(){
+    curStar=null;
+    card.classList.remove('flipped');
+    card.style.transition='transform .3s ease, opacity .3s ease';
+    card.style.transform='scale(.6)';
+    card.style.opacity='0';
+    setTimeout(()=>{ card.style.display='none'; card.style.transition='none'; card.style.transform='scale(1)'; }, 320);
+  }
+  function flipCard(){
+    if(!curStar) return;
+    card.classList.toggle('flipped');
+  }
+
+  // 点亮此星
+  function lightStar(s){
+    if(!s) return;
+    s.target = 1;
+    showToast('已点亮 · 邻星共振');
+    for(const o of stars){ if(o.di===s.di && o.id!==s.id){
+      const d=(o.nx-s.nx)**2+(o.ny-s.ny)**2;
+      if(d<0.012){ o.v += 0.06*(1-d/0.012); }
+    }}
+  }
+
+  // ---- 图谱显隐（v2：拖入 或 按钮收卡；可关闭，不强制常驻） ----
+  const ATLAS_W=200, ATLAS_R=14, ATLAS_T=56, ATLAS_B=16;
+  function atlasGeom(){
+    const ax0 = W-ATLAS_R-ATLAS_W, ax1 = W-ATLAS_R;
+    const ay0 = ATLAS_T, ay1 = H-ATLAS_B;
+    return {ax0,ax1,ay0,ay1, cx:(ax0+ax1)/2, cy:(ay0+ay1)/2};
+  }
+  function overAtlas(x,y){ const g=atlasGeom(); return x>=g.ax0&&x<=g.ax1&&y>=g.ay0&&y<=g.ay1; }
+  function revealAtlas(){ scrim.classList.add('on'); atlas.classList.add('on'); }
+  function hideAtlas(){ scrim.classList.remove('on'); atlas.classList.remove('on'); }
+
+  // ---- 收入图谱 ----
+  function collect(s){
+    if(!s || collected.has(s.id)) return false;
+    collected.add(s.id);
+    const g=atlasGeom();
+    card.style.transition='transform .45s cubic-bezier(.4,0,.2,1), opacity .45s ease';
+    card.style.transform='translate('+(g.cx-W/2)+'px,'+(g.cy-H/2)+'px) scale(.1)';
+    card.style.opacity='0';
+    setTimeout(()=>{
+      card.style.display='none'; card.style.transition='none';
+      curStar=null; addMini(s); updateKPI();
+      atlasTab.classList.toggle('show', collected.size>0);
+      revealAtlas();   // 收卡后图谱显示，便于继续点选
+    }, 450);
+    return true;
+  }
+  function addMini(s){
+    const h=DISC[s.di].hue;
+    const el=document.createElement('div'); el.className='mini';
+    el.style.setProperty('--h', h);
+    el.style.left = (collected.size-1)*12 + 'px';
+    el.innerHTML='<div class="cap"></div>';
+    el.title = DISC[s.di].sub[s.subIdx]+' · '+DISC[s.di].name+' · '+diffLabel(s.diff);
+    el.addEventListener('click', ()=>{ if(!dragging) openCard(s, W/2, H/2); });
+    ribbon.appendChild(el);
+    ribbon.style.width = (collected.size*12 + 24) + 'px';
+  }
+
+  // ---- 卡片拖拽 → 揭示图谱 / 入图谱 / 归位 ----
+  let dragging=false, dsx=0, dsy=0;
+  card.addEventListener('pointerdown', e=>{
+    if(e.button!==0 || !curStar) return;
+    dragging=true; dsx=e.clientX; dsy=e.clientY;
+    card.setPointerCapture(e.pointerId);
+    card.style.transition='none';
+    revealAtlas();   // 拖拽时显示投放区
+  });
+  card.addEventListener('pointermove', e=>{
+    if(dragging){
+      const dx=e.clientX-dsx, dy=e.clientY-dsy;
+      card.style.transform='translate('+dx+'px,'+dy+'px) scale(1)';
+      atlas.classList.toggle('hot', overAtlas(e.clientX,e.clientY));
+    }
+  });
+  card.addEventListener('pointerup', e=>{
+    if(!dragging) return; dragging=false;
+    card.releasePointerCapture(e.pointerId);
+    atlas.classList.remove('hot');
+    if(overAtlas(e.clientX,e.clientY) && curStar){ collect(curStar); }
+    else {
+      card.style.transition='transform .35s cubic-bezier(.2,.9,.3,1)';
+      card.style.transform='scale(1)';
+      hideAtlas();   // 未入图谱则收起投放区
+    }
+  });
+
+  // ---- 三按钮（v2 语义：点亮 / 收入图谱 / 翻面） ----
+  btnLight.addEventListener('click', ()=>{ if(curStar) lightStar(curStar); });
+  btnAtlas.addEventListener('click', ()=>{ if(curStar) collect(curStar); });
+  btnFlip.addEventListener('click', ()=>{ flipCard(); });
+  atlasClose.addEventListener('click', ()=>{ hideAtlas(); });
+  atlasTab.addEventListener('click', ()=>{ if(collected.size>0) revealAtlas(); });
+
+  // ---- 键盘（去按钮） ----
+  window.addEventListener('keydown', e=>{
+    if(e.key==='Escape'){ if(curStar) closeCard(); }
+    else if((e.key==='l'||e.key==='L') && curStar){ lightStar(curStar); }
+    else if(e.key==='f'||e.key==='F'){ flipCard(); }
+    else if(e.key===' '){ if(curStar){ e.preventDefault(); flipCard(); } }
+  });
+
+  // ---- 画布事件 ----
+  cv.addEventListener('mousemove', e=>{
+    userActed=true;
+    const r=cv.getBoundingClientRect();
+    const sx=e.clientX-r.left, sy=e.clientY-r.top;
+    hoverId = nearest(sx,sy);
+    updatePanel();
+  });
+  cv.addEventListener('mouseleave', ()=>{ hoverId=-1; updatePanel(); });
+  cv.addEventListener('mousedown', e=>{
+    const r=cv.getBoundingClientRect();
+    downX=e.clientX-r.left; downY=e.clientY-r.top; moved=0; downOK=true;
+    dragId = nearest(downX,downY);
+  });
+  cv.addEventListener('mouseup', e=>{
+    if(!downOK) return; downOK=false;
+    const r=cv.getBoundingClientRect();
+    const sx=e.clientX-r.left, sy=e.clientY-r.top;
+    if(moved<6){
+      const id = nearest(sx,sy);
+      if(id>=0){
+        const s=stars[id];
+        if(e.button===2){ s.target=0; if(curStar===s) closeCard(); }
+        else { openCard(s, e.clientX, e.clientY); }
+      } else { closeCard(); }
+    }
+  });
+  cv.addEventListener('mousemove', e=>{
+    if(downOK){
+      const r=cv.getBoundingClientRect();
+      const sx=e.clientX-r.left, sy=e.clientY-r.top;
+      const ddx=sx-downX, ddy=sy-downY; moved=Math.max(moved,Math.hypot(ddx,ddy));
+      if(moved>6){ cam.ox+=ddx; cam.oy+=ddy; downX=sx; downY=sy; }
+    }
+  });
+  cv.addEventListener('contextmenu', e=>e.preventDefault());
+  cv.addEventListener('wheel', e=>{
+    e.preventDefault(); userActed=true;
+    const r=cv.getBoundingClientRect();
+    const sx=e.clientX-r.left, sy=e.clientY-r.top;
+    const [wx,wy]=s2w(sx,sy);
+    const f = e.deltaY<0 ? 1.12 : 1/1.12;
+    cam.zoom = Math.max(0.6, Math.min(2.6, cam.zoom*f));
+    const [nwx,nwy]=s2w(sx,sy);
+    cam.ox += (nwx-wx)*cam.zoom*scale;
+    cam.oy += (nwy-wy)*cam.zoom*scale;
+  }, {passive:false});
+
+  // ---- resize ----
+  function resize(){
+    DPR = Math.min(window.devicePixelRatio||1, 2);
+    W = cv.clientWidth; H = cv.clientHeight;
+    cv.width = Math.max(2, Math.floor(W*DPR));
+    cv.height = Math.max(2, Math.floor(H*DPR));
+    ctx.setTransform(DPR,0,0,DPR,0,0);
+    scale = Math.min(W,H);
+  }
+  window.addEventListener('resize', resize);
+  function boot(){
+    resize();
+    if(W<2){ requestAnimationFrame(boot); return; }
+    requestAnimationFrame(draw);
+  }
+  if(document.readyState==='complete') boot();
+  else window.addEventListener('load', boot);
+  setTimeout(resize, 120);
+
+  // ---- 探针（无头校验） ----
+  window.__frames = ()=>frames;
+  window.__kpi = ()=>{
+    let lit=0,sum=0; const byCl=DISC.map(()=>[0,0]);
+    for(const s of stars){ if(s.target>0.5)lit++; sum+=s.m; byCl[s.di][0]+=s.m; byCl[s.di][1]++; }
+    const total=stars.length; let weakI=0,weakV=2;
+    byCl.forEach((c,i)=>{const a=c[0]/c[1]; if(a<weakV){weakV=a;weakI=i;}});
+    return { total, lit, rate:Math.round(lit/total*100), avg:Math.round(sum/total*100), weakest:DISC[weakI].name, atlas:collected.size };
+  };
+  window.__probe = (sx,sy)=>{
+    const id = nearest(sx,sy);
+    if(id<0) return null;
+    const s=stars[id];
+    return { id, name:s.name, type:DISC[s.di].sub[s.subIdx], src:DISC[s.di].name,
+      diff:diffLabel(s.diff), m:Math.round(s.m*100), lit:s.target>0.5, hue:DISC[s.di].hue };
+  };
+  window.__openCard = (id)=>{ if(id>=0&&id<stars.length) openCard(stars[id], W/2, H/2); return !!curStar; };
+  window.__collect = (id)=>{ if(id>=0&&id<stars.length) collect(stars[id]); return collected.size; };
+  window.__light = (id)=>{ if(id>=0&&id<stars.length) lightStar(stars[id]); return window.__kpi(); };
+  window.__firstUnlit = ()=>{ for(const s of stars) if(s.target<0.5) return s.id; return -1; };
+  window.__flip = ()=>{ if(curStar){ flipCard(); return card.classList.contains('flipped'); } return false; };
+  window.__state = ()=>({ frames, err:window.__err, stars:stars.length, edges:edges.length, collected:collected.size, cardVisible:card.style.display!=='none' });
+})();
+</script>
+</body>
+</html>

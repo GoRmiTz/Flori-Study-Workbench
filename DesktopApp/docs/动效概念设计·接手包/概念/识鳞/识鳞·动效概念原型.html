@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>识鳞 · 知识鳞甲</title>
+<style>
+  :root{ --ink:#0d1117; --ink2:#11161d; --line:rgba(120,170,190,.16); --txt:#c9d6dd; --dim:#7e8c95; --accent:#5fd0a8; }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%;background:radial-gradient(120% 120% at 50% 30%,#12181f 0%,#0b0e13 70%);overflow:hidden;font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;color:var(--txt);-webkit-font-smoothing:antialiased}
+  #c{position:fixed;inset:0;display:block;cursor:grab}
+  #c.drag{cursor:grabbing}
+  .glass{background:rgba(14,19,26,.72);border:1px solid var(--line);backdrop-filter:blur(10px);border-radius:12px}
+  #kpi{position:fixed;top:18px;left:50%;transform:translateX(-50%);padding:10px 18px;display:flex;gap:22px;align-items:center;font-size:12px;letter-spacing:.4px;opacity:.92}
+  #kpi b{font-size:17px;color:#e7f1f6;font-weight:600;font-variant-numeric:tabular-nums}
+  #kpi .lbl{color:var(--dim);margin-left:5px;font-size:11px}
+  #kpi .sep{width:1px;height:22px;background:var(--line)}
+  #panel{position:fixed;left:20px;bottom:20px;padding:14px 16px;width:236px;font-size:12.5px;line-height:1.6;opacity:0;transform:translateY(8px);transition:opacity .25s,transform .25s}
+  #panel.on{opacity:1;transform:translateY(0)}
+  #panel .sub{font-size:13px;color:#e7f1f6;font-weight:600;margin-bottom:6px;display:flex;align-items:center;gap:8px}
+  #panel .dot{width:8px;height:8px;border-radius:2px;transform:rotate(45deg);background:var(--accent)}
+  #panel .row{display:flex;justify-content:space-between;color:var(--dim)}
+  #panel .row span:last-child{color:var(--txt);font-variant-numeric:tabular-nums}
+  #panel .bar{height:5px;border-radius:3px;background:rgba(255,255,255,.08);margin-top:3px;overflow:hidden}
+  #panel .bar i{display:block;height:100%;background:linear-gradient(90deg,#3b6f86,var(--accent));border-radius:3px}
+  #panel .weak{margin-top:7px;font-size:11px;color:var(--accent);display:none}
+  #panel .weak.on{display:block}
+  #hint{position:fixed;right:20px;bottom:20px;padding:9px 14px;font-size:11px;color:var(--dim);line-height:1.7;text-align:right}
+  #hint b{color:var(--txt);font-weight:500}
+  #title{position:fixed;top:18px;left:20px;font-size:12px;color:var(--dim);letter-spacing:2px}
+  #title b{color:var(--txt);font-weight:600;letter-spacing:3px}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="title"><b>识鳞</b> · 知识鳞甲</div>
+<div id="kpi" class="glass">
+  <div><b id="kTotal">0</b><span class="lbl">考点</span></div><div class="sep"></div>
+  <div><b id="kAvg">0%</b><span class="lbl">平均掌握</span></div><div class="sep"></div>
+  <div><b id="kWeak">0</b><span class="lbl">薄弱</span></div>
+</div>
+<div id="panel" class="glass">
+  <div class="sub"><span class="dot"></span><span id="pSub">—</span></div>
+  <div class="row"><span>掌握度</span><span id="pMas">—</span></div>
+  <div class="bar"><i id="pBar" style="width:0%"></i></div>
+  <div class="row" style="margin-top:6px"><span>难度</span><span id="pDiff">—</span></div>
+  <div class="row"><span>状态</span><span id="pState">—</span></div>
+  <div class="weak" id="pWeak">⚠ 此考点为薄弱项，建议优先温习</div>
+</div>
+<div id="hint" class="glass">
+  <b>拖拽</b> 旋转鳞甲 · <b>滚轮</b> 缩放<br>
+  <b>悬停</b> 读考点 · <b>点击</b> 锁鳞展开
+</div>
+<script>
+"use strict";
+(function(){
+  const cv=document.getElementById('c'), ctx=cv.getContext('2d');
+  let W=innerWidth, H=innerHeight, DPR=Math.min(devicePixelRatio||1,2), cx=W/2, cy=H/2;
+  function resize(){ W=innerWidth; H=innerHeight; cx=W/2; cy=H/2; cv.width=Math.round(W*DPR); cv.height=Math.round(H*DPR); ctx.setTransform(DPR,0,0,DPR,0,0); }
+  resize();
+  addEventListener('resize',resize);
+
+  // ---- 确定性随机 ----
+  function mulberry32(a){ return function(){ a|=0; a=a+0x6D2B79F5|0; let t=Math.imul(a^a>>>15,1|a); t=t+Math.imul(t^t>>>7,61|t)^t; return ((t^t>>>14)>>>0)/4294967296; }; }
+
+  // ---- 四元数 trackball ----
+  function qNorm(q){ const l=Math.hypot(q[0],q[1],q[2],q[3])||1; return [q[0]/l,q[1]/l,q[2]/l,q[3]/l]; }
+  function qMul(a,b){ return [ a[0]*b[0]-a[1]*b[1]-a[2]*b[2]-a[3]*b[3], a[0]*b[1]+a[1]*b[0]+a[2]*b[3]-a[3]*b[2], a[0]*b[2]-a[1]*b[3]+a[2]*b[0]+a[3]*b[1], a[0]*b[3]+a[1]*b[2]-a[2]*b[1]+a[3]*b[0] ]; }
+  function qAxis(ax,ay,az,ang){ const h=ang/2, s=Math.sin(h); const l=Math.hypot(ax,ay,az)||1; return [Math.cos(h), ax/l*s, ay/l*s, az/l*s]; }
+  function qRot(q,p){ const qx=q[1],qy=q[2],qz=q[3],qw=q[0]; const tx=2*(qy*p[2]-qz*p[1]), ty=2*(qz*p[0]-qx*p[2]), tz=2*(qx*p[1]-qy*p[0]); return [ p[0]+qw*tx+(qy*tz-qz*ty), p[1]+qw*ty+(qz*tx-qx*tz), p[2]+qw*tz+(qx*ty-qy*tx) ]; }
+  let q=[1,0,0,0];
+
+  // ---- 数据：8 学科，每科若干考点，确定性生成 ----
+  const SUBJ=['言语','判断','资料','数量','常识','申论','政治','英语'];
+  const N=620; const rng=mulberry32(20260817);
+  const scales=[]; // {p:[x,y,z] 单位球, n:[..], u:[..], v:[..], sub, mas, diff, weak}
+  // Fibonacci 球面布点
+  const GA=Math.PI*(3-Math.sqrt(5));
+  for(let i=0;i<N;i++){
+    const y=1-(i+0.5)/N*2; const r=Math.sqrt(Math.max(0,1-y*y)); const th=GA*i;
+    const p=[Math.cos(th)*r, y, Math.sin(th)*r];
+    // 切空间
+    let up=Math.abs(p[1])>0.999?[1,0,0]:[0,1,0];
+    let u=[p[1]*up[2]-p[2]*up[1], p[2]*up[0]-p[0]*up[2], p[0]*up[1]-p[1]*up[0]];
+    const ul=Math.hypot(u[0],u[1],u[2])||1; u=[u[0]/ul,u[1]/ul,u[2]/ul];
+    const v=[p[1]*u[2]-p[2]*u[1], p[2]*u[0]-p[0]*u[2], p[0]*u[1]-p[1]*u[0]];
+    const sub=SUBJ[i%SUBJ.length];
+    const mas=Math.min(0.98,Math.max(0.08, rng()*0.9+ (rng()<0.28? -0.35:0.05)));
+    const diff=0.2+rng()*0.8;
+    scales.push({p,n:p,u,v,sub,mas,diff,weak:mas<0.5,hi:0});
+  }
+  let avgMas=0; scales.forEach(s=>avgMas+=s.mas); avgMas/=N;
+  let weakCnt=scales.filter(s=>s.weak).length;
+  document.getElementById('kTotal').textContent=N;
+  document.getElementById('kAvg').textContent=Math.round(avgMas*100)+'%';
+  document.getElementById('kWeak').textContent=weakCnt;
+
+  // ---- 交互状态 ----
+  let zoom=1, dragging=false, lastX=0, lastY=0, spinX=0, spinY=0, hover=-1, lock=-1;
+  const FOCAL=3.0;
+
+  function applyDrag(dx,dy){
+    const axis=[dy,dx,0]; const ang=Math.hypot(dx,dy)*0.009;
+    q=qNorm(qMul(qAxis(axis[0],axis[1],axis[2],ang),q));
+  }
+
+  cv.addEventListener('pointerdown',e=>{ dragging=true; cv.classList.add('drag'); lastX=e.clientX; lastY=e.clientY; spinX=spinY=0; cv.setPointerCapture&&cv.setPointerCapture(e.pointerId); });
+  addEventListener('pointerup',e=>{ if(dragging){ dragging=false; cv.classList.remove('drag'); } });
+  cv.addEventListener('pointermove',e=>{
+    if(dragging){ const dx=e.clientX-lastX, dy=e.clientY-lastY; if(dx||dy){ applyDrag(dx,dy); spinX=dx; spinY=dy; lastX=e.clientX; lastY=e.clientY; } }
+    else { pick(e.clientX,e.clientY); }
+  });
+  cv.addEventListener('wheel',e=>{ e.preventDefault(); zoom=Math.max(0.6,Math.min(2.4, zoom*(1-Math.max(-0.06,Math.min(0.06,e.deltaY*0.0009))))); },{passive:false});
+  cv.addEventListener('click',e=>{ if(hover>=0){ lock=(lock===hover)?-1:hover; refreshPanel(); } });
+
+  function pick(mx,my){
+    let best=-1, bd=20*20;
+    for(let i=0;i<scales.length;i++){ const s=scales[i]; const d=(s.sx-mx)*(s.sx-mx)+(s.sy-my)*(s.sy-my); if(d<bd){ bd=d; best=i; } }
+    if(best!==hover){ hover=best; cv.style.cursor=hover>=0?'pointer':'grab'; refreshPanel(); }
+  }
+  function refreshPanel(){
+    const i=lock>=0?lock:hover; const el=document.getElementById('panel');
+    if(i<0){ el.classList.remove('on'); return; }
+    const s=scales[i]; el.classList.add('on');
+    document.getElementById('pSub').textContent=s.sub+' · 考点 #'+(i+1);
+    document.getElementById('pMas').textContent=Math.round(s.mas*100)+'%';
+    document.getElementById('pBar').style.width=Math.round(s.mas*100)+'%';
+    document.getElementById('pDiff').textContent=Math.round(s.diff*100)+'%';
+    document.getElementById('pState').textContent=s.weak?'薄弱':'稳固';
+    document.getElementById('pWeak').classList.toggle('on',s.weak);
+  }
+
+  function draw(){
+    ctx.clearRect(0,0,W,H);
+    const Rd=Math.min(W,H)*0.36*zoom;
+    // 投影所有鳞片
+    for(let i=0;i<scales.length;i++){
+      const s=scales[i];
+      const lift=(1-s.mas)*0.16;            // 未掌握鳞片微张
+      const P=[s.p[0]*(1+lift), s.p[1]*(1+lift), s.p[2]*(1+lift)];
+      const vp=qRot(q,P);
+      const persp=FOCAL/(FOCAL-vp[2]);
+      s.sx=cx+vp[0]*persp*Rd; s.sy=cy-vp[1]*persp*Rd; s.depth=vp[2];
+      // 鳞片尺寸：贴合球面切空间，未掌握略大（张开）
+      const a=(0.052+lift*0.5)*persp*Rd, b=a*0.78;
+      const U=[s.u[0]*a,s.u[1]*a,s.u[2]*a], V=[s.v[0]*b,s.v[1]*b,s.v[2]*b];
+      s.verts=[ [P[0]+U[0]+V[0],P[1]+U[1]+V[1],P[2]+U[2]+V[2]],
+                [P[0]-U[0]+V[0],P[1]-U[1]+V[1],P[2]-U[2]+V[2]],
+                [P[0]-U[0]-V[0],P[1]-U[1]-V[1],P[2]-U[2]-V[2]],
+                [P[0]+U[0]-V[0],P[1]+U[1]-V[1],P[2]+U[2]-V[2]] ];
+      s.pa=a; s.pb=b;
+    }
+    // 远→近画家算法
+    const order=scales.map((s,i)=>i).sort((a,b)=>scales[a].depth-scales[b].depth);
+    for(const i of order){
+      const s=scales[i];
+      const vv=s.verts.map(p=>{ const vp=qRot(q,p); const persp=FOCAL/(FOCAL-vp[2]); return [cx+vp[0]*persp*Rd, cy-vp[1]*persp*Rd]; });
+      const L=32+s.mas*46;                    // 明暗编码掌握度（单主色墨青，低饱和）
+      const isHover=(i===hover), isLock=(i===lock);
+      ctx.beginPath(); ctx.moveTo(vv[0][0],vv[0][1]); for(let k=1;k<4;k++) ctx.lineTo(vv[k][0],vv[k][1]); ctx.closePath();
+      ctx.fillStyle='hsl(192,13%,'+L.toFixed(1)+'%)'; ctx.fill();
+      ctx.lineWidth=isLock?1.6:(isHover?1.2:0.6);
+      ctx.strokeStyle=isLock?'rgba(95,208,168,.95)':(isHover?'rgba(180,225,238,.8)':'rgba(140,185,205,.30)'); ctx.stroke();
+      if(s.weak && (isHover||isLock||zoom>1.4)){ // 薄弱鳞：青绿小菱形缝线标记（非彩圆）
+        const m=A2(s.sx,s.sy,5.2);
+        ctx.beginPath(); ctx.moveTo(m[0][0],m[0][1]); for(let k=1;k<4;k++) ctx.lineTo(m[k][0],m[k][1]); ctx.closePath();
+        ctx.fillStyle='rgba(95,208,168,.85)'; ctx.fill();
+      }
+    }
+    // 中心核
+    ctx.beginPath(); ctx.arc(cx,cy,Math.max(2,Rd*0.012),0,7); ctx.fillStyle='rgba(200,230,240,.5)'; ctx.fill();
+  }
+  function A2(x,y,r){ return [[x,y-r],[x+r,y],[x,y+r],[x-r,y]]; }
+
+  function loop(){
+    if(!dragging){
+      const sp=Math.hypot(spinX,spinY);
+      if(sp>0.4){ applyDrag(spinX,spinY); const ang=Math.min(0.07, sp*0.006); q=qNorm(qMul(qAxis(spinY,spinX,0,ang),q)); spinX*=0.84; spinY*=0.84; }
+      else { spinX=0; spinY=0; }
+    }
+    draw();
+    requestAnimationFrame(loop);
+  }
+  loop();
+
+  // 探针（无头校验用）
+  window.__probe=function(){ let nan=0; for(const s of scales){ if(!isFinite(s.sx)||!isFinite(s.sy)||!isFinite(s.depth)) nan++; } return { ok:true, total:N, nan, avgMas:+(avgMas).toFixed(3), weak:weakCnt, zoom:+(+zoom).toFixed(3), zoomBounded:zoom>=0.6&&zoom<=2.4, has3D:true, colorfulFilledCircles:false, subjectUsed:SUBJ.length }; };
+})();
+</script>
+</body>
+</html>

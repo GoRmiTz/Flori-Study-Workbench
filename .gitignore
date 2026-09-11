@@ -1,0 +1,71 @@
+# ============================================================
+#  芙洛理 Flori · 根 .gitignore
+#  合并 DesktopApp / Server 两份 .gitignore。
+#  原则：绝不提交构建产物、运行时数据、密钥、以及需授权的第三方 SDK / 模型。
+# ============================================================
+
+# ---- 构建产物 / 中间文件 ----
+build/
+build_obj/
+_build/
+_design/
+.cache/
+*.obj
+*.obj.import
+*.ilk
+*.pdb
+vc140.pdb
+*.bak
+*-bak
+nul
+
+# ---- 截图自测产物 ----
+shot.png
+shots/
+screenshots/
+# Godot 时代遗留的导入描述文件（*.import / *.ctex），与实际资源无关，一律不入库
+*.import
+*.ctex
+
+# ---- 运行时日志 ----
+*.log
+
+# ---- 密钥 / 凭据 / 本地测试夹具 ----
+secret.key
+*.key
+.p_*
+.mock_*
+.smoke/
+.smoke2/
+
+# ---- 个人数据存档（账号 / 口令 / 个人任务种子等，仅供本地测试取回，禁止入库）----
+private/
+
+# ---- 服务端运行时数据（含用户数据 / 媒体 / 房间聊天）----
+data/
+
+# ---- 第三方 / 构建产物保护（禁止入库）----
+# 历史第三方授权 SDK / 依赖（如 Cubism SDK、GLEW）置于 third_party/，禁止提交。
+third_party/
+# tools/ 下取回 / 自建的二进制（调试与测试 exe）一律不入库。
+# 注意：如将来确有「允许再分发」的二进制需要入库，可在对应路径写 !xxx 例外。
+*.dll
+*.lib
+*.exe
+
+# ---- 依赖（当前零依赖，留作防护）----
+node_modules/
+
+# ---- 发布包（按需生成）----
+releases/
+
+# ---- 编辑器 / 系统 ----
+.vs/
+.vscode/
+*.suo
+*.swp
+.DS_Store
+# 暂停开发产物的归档目录（不参与构建、不入库；如看板娘运行时 _attic/kanban_runtime）
+_attic/
+# 旧参考资料（PM 文档/封存 WebApp/设计提案，仅本机参考，不入库）
+reference/

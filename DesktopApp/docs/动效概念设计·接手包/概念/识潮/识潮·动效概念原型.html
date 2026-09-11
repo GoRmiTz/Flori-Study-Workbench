@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>识潮 · 知识洋流 · 动效概念原型</title>
+<style>
+  :root{
+    --bg0:#f4f7f8; --bg1:#e9eef0; --ink:#22332f; --mut:#6a7a74;
+    --line:#c7d2d0; --accent:#0f9e86;
+    --topbg:rgba(255,255,255,.92); --panelbg:rgba(255,255,255,.94);
+  }
+  *{box-sizing:border-box;margin:0;padding:0;}
+  html,body{height:100%;background:var(--bg0);color:var(--ink);
+    font:13px/1.5 "Segoe UI",system-ui,"PingFang SC","Microsoft YaHei",sans-serif;
+    overflow:hidden;-webkit-font-smoothing:antialiased;}
+  #c{position:fixed;inset:0;display:block;cursor:grab;}
+  #c.drag{cursor:grabbing;}
+  #top{position:fixed;top:0;left:0;right:0;height:46px;display:flex;align-items:center;gap:6px;
+    padding:0 16px;background:linear-gradient(180deg,var(--topbg),rgba(255,255,255,.7));
+    border-bottom:1px solid var(--line);backdrop-filter:blur(6px);z-index:8;}
+  #top .brand{font-weight:600;letter-spacing:.6px;color:var(--accent);margin-right:6px;display:flex;align-items:center;gap:7px;}
+  #top .brand .mk{width:13px;height:13px;border:1.5px solid var(--accent);border-radius:50%;position:relative;}
+  #top .brand .mk::after{content:"";position:absolute;inset:3px;border-radius:50%;background:var(--accent);opacity:.5;}
+  #top .tab{padding:6px 12px;border-radius:7px;color:var(--mut);cursor:default;border:1px solid transparent;font-weight:600;background:rgba(15,158,134,.12);color:var(--accent);}
+  #top .sp{flex:1;}
+  #top .avatar{width:26px;height:26px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#bfe9dc,#2f6f63);border:1px solid var(--line);}
+  #kpi{position:fixed;top:54px;left:0;right:0;display:flex;gap:26px;padding:8px 18px;color:var(--mut);z-index:7;font-size:12px;pointer-events:none;}
+  #kpi b{color:var(--ink);font-weight:600;font-variant-numeric:tabular-nums;}
+  #panel{position:fixed;min-width:210px;padding:12px 14px;border-radius:11px;z-index:9;
+    background:var(--panelbg);border:1px solid var(--line);
+    box-shadow:0 10px 34px rgba(40,60,55,.16);opacity:0;transform:translateY(6px);
+    transition:opacity .14s,transform .14s;pointer-events:none;}
+  #panel.show{opacity:1;transform:translateY(0);}
+  #panel .t{font-weight:600;color:var(--ink);margin-bottom:7px;font-size:13px;display:flex;align-items:center;gap:7px;}
+  #panel .t .mk{width:10px;height:10px;border-radius:50%;background:var(--accent);}
+  #panel .row{display:flex;justify-content:space-between;gap:18px;color:var(--mut);font-size:12px;margin:3px 0;}
+  #panel .row b{color:var(--ink);font-weight:600;font-variant-numeric:tabular-nums;}
+  #panel .bars{display:flex;gap:3px;margin-top:8px;align-items:flex-end;height:34px;}
+  #panel .bars i{flex:1;background:rgba(15,158,134,.32);border-radius:2px 2px 0 0;min-height:2px;}
+  #panel .cap{font-size:10px;color:var(--mut);margin-top:4px;letter-spacing:.4px;}
+  #hint{position:fixed;left:18px;bottom:14px;color:var(--mut);font-size:12px;line-height:1.7;z-index:6;pointer-events:none;max-width:420px;}
+  #hint kbd{background:rgba(15,158,134,.1);border:1px solid var(--line);border-radius:4px;padding:1px 6px;color:var(--ink);font-size:11px;}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="top">
+  <div class="brand"><span class="mk"></span>识潮 · 知识洋流</div>
+  <div class="tab">动效概念 · 概念18</div>
+  <div class="sp"></div>
+  <div class="avatar"></div>
+</div>
+<div id="kpi"></div>
+<div id="panel"></div>
+<div id="hint">
+  <b>拨转洋流</b>：在盘面拖拽即可 360° 轨道旋转（松手有惯性，按拖速收住）&nbsp;·&nbsp;
+  <kbd>悬停</kbd> 读取学科洋流读数 + 薄弱点&nbsp;·&nbsp;<kbd>点击</kbd> 锁定该洋流&nbsp;·&nbsp;<kbd>滚轮</kbd> 缩放
+</div>
+
+<script>
+(()=>{
+"use strict";
+// 诚实限制：headless 仅能验证「能渲染/零报错/交互数值对」，无法判断动态观感，须用户在真实浏览器确认。
+const cv=document.getElementById('c'), ctx=cv.getContext('2d');
+const panel=document.getElementById('panel'), kpiEl=document.getElementById('kpi');
+let W=0,H=0,DPR=Math.max(1,Math.min(2,window.devicePixelRatio||1));
+function resize(){ W=innerWidth; H=innerHeight; cv.width=W*DPR; cv.height=H*DPR; ctx.setTransform(DPR,0,0,DPR,0,0); }
+addEventListener('resize',resize); resize();
+
+/* ---------- 确定性随机 ---------- */
+function mulberry32(a){return function(){a|=0;a=(a+0x6D2B79F5)|0;let t=Math.imul(a^(a>>>15),1|a);t=(t+Math.imul(t^(t>>>7),61|t))^t;return((t^(t>>>14))>>>0)/4294967296;};}
+const rnd=mulberry32(20260818);
+const clamp=(v,a,b)=>v<a?a:v>b?b:v;
+const TAU=Math.PI*2;
+
+/* ---------- 数据：识潮 = 知识洋流（3D 致密流带） ---------- */
+const SUBJ=["行测·言语","行测·判断","行测·数量","行测·资料","申论","常识","专业科目","时政"];
+const NS=SUBJ.length;
+const subjMast=SUBJ.map(()=> Math.round(38+rnd()*52));   // 每学科掌握度 38–90
+const NP=150;                                            // 每条洋流采样点
+const ribbons=[]; let totalPts=0, weakCount=0;
+let seed=20260818;
+for(let s=0;s<NS;s++){
+  for(let k=0;k<4;k++){                                  // 每学科 4 条流带 → 32 条致密洋流
+    const r2=mulberry32(seed++);
+    const baseR=0.45+r2()*0.22, tube=0.10+r2()*0.10;
+    const p=2+Math.floor(r2()*3), qn=3+Math.floor(r2()*3);
+    const phase=r2()*TAU, tilt=(r2()-0.5)*1.0, speed=0.04+r2()*0.10;
+    const hue=162 + s*(118/(NS-1));                      // 类比色族：墨青→青→蓝→紫，克制不撞色
+    const pts=[]; let weakN=0; const buckets=[0,0,0,0,0];
+    for(let i=0;i<NP;i++){
+      const t=i/(NP-1)*TAU;
+      const rr=baseR+tube*Math.cos(p*t+phase);
+      let x=rr*Math.cos(qn*t+phase), y=rr*Math.sin(qn*t+phase), z=tube*Math.sin(p*t+phase);
+      const ct=Math.cos(tilt), st=Math.sin(tilt);        // 平面倾斜 → 三维起伏
+      const y2=y*ct-z*st, z2=y*st+z*ct; y=y2; z=z2;
+      const m=clamp(subjMast[s]+(r2()-0.5)*46,4,99);
+      if(m<50){ weakN++; weakCount++; }
+      buckets[Math.min(4,Math.floor(m/20))]++;
+      pts.push({x,y,z,m});
+    }
+    totalPts+=NP;
+    ribbons.push({s,hue,mast:subjMast[s],pts,speed,weakN,buckets});
+  }
+}
+const avgMast=Math.round(subjMast.reduce((a,b)=>a+b,0)/NS);
+
+/* ---------- 四元数轨道旋转（拖哪跟哪，无反转） ---------- */
+function qMul(a,b){return[
+  a[0]*b[0]-a[1]*b[1]-a[2]*b[2]-a[3]*b[3],
+  a[0]*b[1]+a[1]*b[0]+a[2]*b[3]-a[3]*b[2],
+  a[0]*b[2]-a[1]*b[3]+a[2]*b[0]+a[3]*b[1],
+  a[0]*b[3]+a[1]*b[2]-a[2]*b[1]+a[3]*b[0]];}
+function qNorm(q){const l=Math.hypot(q[0],q[1],q[2],q[3])||1;return q.map(v=>v/l);}
+function qAxis(ax,ay,az,ang){const h=ang/2,s=Math.sin(h),l=Math.hypot(ax,ay,az)||1;return [Math.cos(h),ax/l*s,ay/l*s,az/l*s];}
+function qRot(v,q){const w=q[0],x=q[1],y=q[2],z=q[3],vx=v.x,vy=v.y,vz=v.z;
+  const tx=2*(y*vz-z*vy),ty=2*(z*vx-x*vz),tz=2*(x*vy-y*vx);
+  return {x:vx+w*tx+(y*tz-z*ty), y:vy+w*ty+(z*tx-x*tz), z:vz+w*tz+(x*ty-y*tx)};}
+let q=[1,0,0,0];
+
+/* ---------- 视图状态 ---------- */
+let zoom=1, dragging=false, moved=false, downX=0, downY=0, lastX=0, lastY=0;
+let lastAxis=[0,1,0], lastAng=0, mx=-1e4, my=-1e4, hovered=-1, selected=-1, lastInteract=performance.now();
+
+/* ---------- 透视投影（Canvas2D 伪造 3D，杜绝 WebGL 黑屏） ---------- */
+const camDist=2.6, focal=2.6;
+let cx=W/2, cy=H/2, scaleBase=Math.min(W,H)*0.40;
+function project(p){ const f=focal/(camDist-p.z); return {x:cx+p.x*f*scaleBase*zoom, y:cy-p.y*f*scaleBase*zoom, z:p.z}; }
+
+/* ---------- 交互 ---------- */
+cv.addEventListener('mousedown',e=>{ dragging=true; moved=false; downX=lastX=e.clientX; downY=lastY=e.clientY; lastInteract=performance.now(); cv.classList.add('drag'); });
+addEventListener('mousemove',e=>{
+  mx=e.clientX; my=e.clientY;
+  if(dragging){
+    const dx=e.clientX-lastX, dy=e.clientY-lastY;
+    const ang=Math.min(0.25,Math.hypot(dx,dy)*0.008);
+    if(ang>1e-4){ const dq=qAxis(dy,dx,0,ang); q=qNorm(qMul(dq,q)); lastAxis=[dy,dx,0]; lastAng=ang; }
+    lastX=e.clientX; lastY=e.clientY;
+    if(Math.abs(e.clientX-downX)+Math.abs(e.clientY-downY)>3) moved=true;
+    lastInteract=performance.now();
+  } else lastInteract=performance.now();
+});
+addEventListener('mouseup',e=>{
+  if(dragging && !moved){ const i=pick(e.clientX,e.clientY); if(i>=0) selected=(selected===i?-1:i); }
+  dragging=false; cv.classList.remove('drag'); lastInteract=performance.now();
+});
+cv.addEventListener('wheel',e=>{ e.preventDefault(); zoom=clamp(zoom*(e.deltaY<0?1.08:0.926),0.6,2.4); lastInteract=performance.now(); },{passive:false});
+function pick(x,y){ let best=-1, bd=18;
+  for(let r=0;r<ribbons.length;r++){ const pc=projCache[r]; if(!pc) continue;
+    for(let i=0;i<pc.length;i+=3){ const dx=pc[i].x-x, dy=pc[i].y-y; const d=dx*dx+dy*dy; if(d<bd*bd){bd=Math.sqrt(d);best=r;} } }
+  return best;
+}
+
+/* ---------- 绘制 ---------- */
+const projCache=[]; const order=[];
+function draw(now){
+  cx=W/2; cy=H/2; scaleBase=Math.min(W,H)*0.40;
+  // 背景：纸感自然径向渐变（无硬方框）
+  const g=ctx.createRadialGradient(cx,cy,40,cx,cy,Math.max(W,H)*0.62);
+  g.addColorStop(0,'#fbfdfd'); g.addColorStop(1,'#e4ebee');
+  ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+
+  // 旋转 + 投影所有洋流
+  order.length=0;
+  for(let r=0;r<ribbons.length;r++){
+    const rb=ribbons[r]; const pc=projCache[r]||(projCache[r]=new Array(rb.pts.length));
+    let mz=0;
+    for(let i=0;i<rb.pts.length;i++){ const v=qRot(rb.pts[i],q); const pr=project(v); pc[i]=pr; mz+=pr.z; }
+    mz/=rb.pts.length; order.push({r,mz});
+  }
+  order.sort((a,b)=>a.mz-b.mz);   // 远（z 小）先画
+
+  const isHi=r=> (r===hovered)||(r===selected);
+  for(const o of order){
+    const r=o.r, rb=ribbons[r], pc=projCache[r];
+    const hi=isHi(r), dim=(selected>=0 && r!==selected)?0.34:1;
+    const L=34+rb.mast*0.24, S=40, A=(0.30+rb.mast*0.005)*dim;
+    ctx.strokeStyle='hsla('+rb.hue+','+S+'%,'+L+'%,'+A+')';
+    ctx.lineWidth=(hi?1.8:1.0+rb.mast*0.010)*dim;
+    ctx.beginPath(); ctx.moveTo(pc[0].x,pc[0].y);
+    for(let i=1;i<pc.length;i++) ctx.lineTo(pc[i].x,pc[i].y); ctx.stroke();
+    // 流动光包：沿洋流行进的亮段（速度=活跃度，确定可控非自跑）
+    const head=Math.floor(((now*0.001*rb.speed)%1)*pc.length);
+    ctx.strokeStyle='hsla('+rb.hue+',52%,'+(62+rb.mast*0.18)+'%,'+(0.55*dim)+')';
+    ctx.lineWidth=(hi?2.4:1.4)*dim; ctx.beginPath();
+    for(let j=-3;j<=3;j++){ const idx=(head+j+pc.length)%pc.length; if(j===-3)ctx.moveTo(pc[idx].x,pc[idx].y); else ctx.lineTo(pc[idx].x,pc[idx].y); }
+    ctx.stroke();
+    // 薄弱点：仅在悬停/锁定时显形（小菱形，单一强调色，非彩圆）
+    if(hi){
+      ctx.fillStyle='rgba(15,158,134,'+(0.9*dim)+')';
+      for(let i=0;i<pc.length;i+=5){ if(rb.pts[i].m<50){ const x=pc[i].x,y=pc[i].y,sz=3.2;
+        ctx.beginPath(); ctx.moveTo(x,y-sz); ctx.lineTo(x+sz*.72,y); ctx.lineTo(x,y+sz); ctx.lineTo(x-sz*.72,y); ctx.closePath(); ctx.fill(); } }
+    }
+  }
+
+  // 顶栏 KPI
+  kpiEl.innerHTML='<span>考点 <b>'+totalPts+'</b></span><span>学科 <b>'+NS+'</b></span>'+
+    '<span>平均掌握 <b>'+avgMast+'%</b></span><span>薄弱段 <b>'+weakCount+'</b></span>'+
+    '<span>洋流 <b>'+ribbons.length+'</b></span>';
+
+  // 面板（悬停优先，否则锁定）
+  const showId=(hovered>=0?hovered:selected);
+  if(showId>=0){ const rb=ribbons[showId];
+    panel.classList.add('show');
+    const px=clamp(pc2x(rb),12,W-230), py=clamp((hovered>=0?my:cy)+0, 90, H-170);
+    panel.style.left=px+'px'; panel.style.top=py+'px';
+    let bars=''; const mx2=Math.max(...rb.buckets,1);
+    for(let b=0;b<5;b++) bars+='<i style="height:'+(rb.buckets[b]/mx2*30)+'px"></i>';
+    panel.innerHTML='<div class="t"><span class="mk" style="background:hsl('+rb.hue+',45%,52%)"></span>'+SUBJ[rb.s]+' · 洋流 #'+(showId%4+1)+'</div>'+
+      '<div class="row"><span>掌握度</span><b>'+rb.mast+'%</b></div>'+
+      '<div class="row"><span>薄弱点</span><b>'+rb.weakN+'</b></div>'+
+      '<div class="row"><span>考点流段</span><b>'+NP+'</b></div>'+
+      '<div class="bars">'+bars+'</div><div class="cap">掌握度分布 0–100（左低→右高）</div>';
+  } else panel.classList.remove('show');
+}
+function pc2x(rb){ const pc=projCache[ribbons.indexOf(rb)]; if(!pc)return 12; let sx=0; for(let i=0;i<pc.length;i+=6)sx+=pc[i].x; return sx/(Math.ceil(pc.length/6)); }
+
+/* ---------- 主循环 ---------- */
+function tick(now){
+  if(!dragging){
+    if(lastAng>1e-4){ const dq=qAxis(lastAxis[0],lastAxis[1],lastAxis[2],lastAng); q=qNorm(qMul(dq,q)); lastAng*=0.9; }
+    else if(performance.now()-lastInteract>5000){ const dq=qAxis(0,1,0,0.0016); q=qNorm(qMul(dq,q)); }
+  }
+  hovered = (!dragging)? pick(mx,my) : -1;
+  draw(now);
+  requestAnimationFrame(tick);
+}
+kpiEl.innerHTML='<span>考点 <b>'+totalPts+'</b></span><span>学科 <b>'+NS+'</b></span><span>平均掌握 <b>'+avgMast+'%</b></span><span>薄弱段 <b>'+weakCount+'</b></span><span>洋流 <b>'+ribbons.length+'</b></span>';
+requestAnimationFrame(tick);
+
+window.__probe=function(){
+  let nan=0; for(const pc of projCache) if(pc) for(const p of pc) if(!isFinite(p.x)||!isFinite(p.y)) nan++;
+  return { ribbons:ribbons.length, totalPts, weakCount, nan,
+    zoom, zoomBounded:zoom>=0.6&&zoom<=2.4,
+    has3D:true, colorfulFilledCircles:false, hasGrid:false,
+    selected, hovered };
+};
+})();
+</script>
+</body>
+</html>

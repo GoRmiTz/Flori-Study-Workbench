@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>识构 · 知识桁架</title>
+<style>
+  :root{
+    --paper:#f4f1e8; --paper2:#efe9da; --ink:#2a3633; --ink-soft:#5a6a64;
+    --line:#3a4a45; --accent:#269678; --hair:rgba(42,54,51,.14);
+  }
+  *{box-sizing:border-box;}
+  html,body{height:100%;margin:0;}
+  body{
+    font-family:"PingFang SC","Microsoft YaHei",-apple-system,"Segoe UI",sans-serif;
+    color:var(--ink);
+    /* 亮色纸底：CSS 纸纹兜底（WebGL 背景失败也绝不黑屏） */
+    background:
+      radial-gradient(120% 120% at 50% 18%, #faf7ef 0%, var(--paper) 46%, var(--paper2) 100%);
+    overflow:hidden;
+  }
+  /* 顶栏：mock 真实 chrome */
+  #topbar{height:46px;display:flex;align-items:center;gap:22px;padding:0 18px;
+    border-bottom:1px solid var(--hair);background:rgba(255,255,255,.35);backdrop-filter:blur(2px);}
+  #brand{font-weight:700;letter-spacing:.12em;font-size:14px;color:var(--ink);}
+  #tabs{display:flex;gap:18px;font-size:13px;color:var(--ink-soft);}
+  #tabs .t{padding:4px 2px;cursor:default;border-bottom:2px solid transparent;}
+  #tabs .t.on{color:var(--ink);border-bottom-color:var(--accent);font-weight:600;}
+  #avatar{margin-left:auto;width:28px;height:28px;border-radius:50%;
+    background:linear-gradient(135deg,#cfe7df,#a9cfc4);border:1px solid var(--hair);
+    display:flex;align-items:center;justify-content:center;font-size:12px;color:#33665a;}
+  /* 舞台 */
+  #stage{position:absolute;left:0;right:0;top:46px;bottom:0;}
+  #bg,#cv{position:absolute;inset:0;width:100%;height:100%;display:block;}
+  #bg{z-index:0;}
+  #cv{z-index:1;touch-action:none;cursor:grab;}
+  #cv:active{cursor:grabbing;}
+  /* KPI */
+  #kpi{position:absolute;left:14px;top:58px;z-index:2;display:flex;gap:14px;flex-wrap:wrap;
+    font-size:12px;color:var(--ink-soft);pointer-events:none;}
+  #kpi .k{background:rgba(255,255,255,.5);border:1px solid var(--hair);border-radius:7px;
+    padding:4px 9px;backdrop-filter:blur(2px);}
+  #kpi .k b{color:var(--ink);font-variant-numeric:tabular-nums;}
+  /* 悬停面板 */
+  #panel{position:absolute;z-index:3;min-width:176px;max-width:230px;display:none;
+    background:rgba(252,250,244,.94);border:1px solid var(--hair);border-radius:9px;
+    padding:9px 11px;font-size:12px;line-height:1.55;box-shadow:0 6px 20px rgba(40,50,46,.10);}
+  #panel .name{font-weight:700;color:var(--ink);margin-bottom:3px;}
+  #panel .row{display:flex;justify-content:space-between;gap:10px;color:var(--ink-soft);}
+  #panel .row b{color:var(--ink);font-variant-numeric:tabular-nums;}
+  #panel .tag{display:inline-block;margin-top:5px;padding:1px 7px;border-radius:20px;font-size:11px;}
+  #panel .tag.m{background:#e3efe9;color:#2c7a62;}
+  #panel .tag.w{background:#f3e7d8;color:#9a6b34;}
+  /* 提示 */
+  #hint{position:absolute;left:50%;bottom:16px;transform:translateX(-50%);z-index:2;
+    font-size:12px;color:var(--ink-soft);background:rgba(255,255,255,.5);
+    border:1px solid var(--hair);border-radius:20px;padding:5px 14px;pointer-events:none;}
+  #legend{position:absolute;right:14px;top:58px;z-index:2;font-size:11px;color:var(--ink-soft);
+    background:rgba(255,255,255,.5);border:1px solid var(--hair);border-radius:8px;padding:7px 10px;line-height:1.7;}
+  #legend .sw{display:inline-block;width:10px;height:10px;margin-right:6px;vertical-align:middle;border:1px solid var(--line);}
+  #err{position:absolute;inset:0;z-index:5;display:none;align-items:center;justify-content:center;
+    color:#9a3b34;font-size:13px;}
+</style>
+</head>
+<body>
+  <div id="topbar">
+    <div id="brand">芙洛理</div>
+    <div id="tabs">
+      <div class="t">知识库</div><div class="t">练考</div><div class="t">复盘</div>
+      <div class="t on">识构</div>
+    </div>
+    <div id="avatar">律</div>
+  </div>
+
+  <div id="stage">
+    <canvas id="bg"></canvas>
+    <canvas id="cv"></canvas>
+  </div>
+
+  <div id="kpi">
+    <div class="k">节点 <b id="kN">0</b></div>
+    <div class="k">已掌握 <b id="kM">0</b></div>
+    <div class="k">掌握率 <b id="kR">0%</b></div>
+    <div class="k">薄弱 <b id="kW">0</b></div>
+    <div class="k">杆件 <b id="kE">0</b></div>
+  </div>
+
+  <div id="legend">
+    <div><span class="sw" style="background:#2f4a44"></span>已掌握（浓墨）</div>
+    <div><span class="sw" style="background:#bccac3"></span>薄弱（淡墨）</div>
+    <div><span class="sw" style="background:#269678"></span>薄弱描边</div>
+    <div style="margin-top:3px;opacity:.8">细线=杆件（关联）</div>
+  </div>
+
+  <div id="panel"></div>
+  <div id="hint">拖拽旋转 · 滚轮缩放 · 悬停读数 · 单击点亮并飞入 · 右键取消 · Esc 复位</div>
+  <div id="err"></div>
+
+<script>
+/* =========================================================================
+   识构 · 知识桁架  —  单文件概念原型
+   架构：Canvas2D 自洽主舞台（透明底，墨线绘于亮纸） + WebGL2 受控背景层（仅暖白纸+极淡墨晕/蓝图网格）
+        WebGL 任何编译/链接失败 → #bg display:none，亮纸由 CSS 兜底，绝不黑屏。
+   母题：3D 空间桁架/网架结构（区别于识墟浮岛/识渊下潜/识悬平衡）。
+   诚实限制：headless 仅证逻辑不崩/节点在屏/无NaN；观感须真机确认。
+   ========================================================================= */
+
+const subjects = ['行测','申论','常识','时政','专业课','英语','政治','数学'];
+const mulberry32 = (a)=>{ return function(){ a|=0; a=a+0x6D2B79F5|0; let t=Math.imul(a^a>>>15,1|a); t=t+Math.imul(t^t>>>7,61|t)^t; return ((t^t>>>14)>>>0)/4294967296; }; };
+
+function clamp(v,a,b){ return v<a?a:(v>b?b:v); }
+function dist2(a,b){ const dx=a.x-b.x,dy=a.y-b.y,dz=a.z-b.z; return dx*dx+dy*dy+dz*dz; }
+
+/* ---------- 数据：8 学科各成一簇晶格，再编织成整体连通网架 ---------- */
+const nodes=[], members=[];
+function fibSphere(n,R){
+  const pts=[]; const off=2/n; const inc=Math.PI*(3-Math.sqrt(5));
+  for(let i=0;i<n;i++){ const y=i*off-1+off/2; const r=Math.sqrt(Math.max(0,1-y*y)); const phi=i*inc;
+    pts.push([Math.cos(phi)*r*R, y*R*0.82, Math.sin(phi)*r*R]); }
+  return pts;
+}
+const centers = fibSphere(8,9);
+let rnd = mulberry32(20260818);
+const NS = 18; // 每簇节点数 → 8×18=144 节点
+for(let ci=0; ci<8; ci++){
+  const c=centers[ci];
+  const grid=[];
+  for(let x=-1;x<=1;x++)for(let y=-1;y<=1;y++)for(let z=-1;z<=1;z++) grid.push([x,y,z]);
+  for(let i=grid.length-1;i>0;i--){ const j=Math.floor(rnd()*(i+1)); const tmp=grid[i]; grid[i]=grid[j]; grid[j]=tmp; }
+  const taken=grid.slice(0,NS);
+  for(const g of taken){
+    const jx=(rnd()-0.5)*0.5, jy=(rnd()-0.5)*0.5, jz=(rnd()-0.5)*0.5;
+    const wx=c[0]+g[0]*1.5+jx, wy=c[1]+g[1]*1.5+jy, wz=c[2]+g[2]*1.5+jz;
+    const m0=rnd();
+    nodes.push({ x:wx,y:wy,z:wz, sc:ci,
+      name:subjects[ci]+'·考点'+String(nodes.length+1).padStart(2,'0'),
+      score:1+Math.floor(rnd()*5), diff:rnd(), mt:(m0<0.5?0:1), m:(m0<0.5?0:1) });
+  }
+}
+// 簇内：每个节点连最近 2 个 → 连通晶格
+const bySub={}; nodes.forEach((n,i)=>{ (bySub[n.sc]=bySub[n.sc]||[]).push(i); });
+const edgeSet=new Set();
+function addEdge(a,b,cross){ if(a===b)return; const k=a<b?a+'_'+b:b+'_'+a; if(edgeSet.has(k))return; edgeSet.add(k); members.push([a,b,cross?1:0]); }
+for(const sc in bySub){ const arr=bySub[sc];
+  for(const i of arr){ const ds=arr.filter(j=>j!==i).map(j=>({j,d:dist2(nodes[i],nodes[j])})).sort((p,q)=>p.d-q.d);
+    addEdge(i,ds[0].j,false); addEdge(i,ds[1].j,false); } }
+// 跨簇斜撑：把 8 簇编成一体网架
+for(let i=0;i<8;i++){ addEdge(bySub[i][0], bySub[(i+1)%8][0], true); addEdge(bySub[i][0], bySub[(i+3)%8][0], true); }
+
+/* ---------- 相机（轨道 + 聚焦飞入） ---------- */
+const cam={ yaw:0.6, pitch:-0.22, dist:16, zoom:1.0,
+  tx:0,ty:0,tz:0, ftx:0,fty:0,ftz:0, fdist:16, vyaw:0,vpitch:0 };
+let hoverId=-1, focusId=-1, lastInteract=0;
+
+function project(wx,wy,wz){
+  let x=wx-cam.tx, y=wy-cam.ty, z=wz-cam.tz;
+  const cy=Math.cos(cam.yaw), sy=Math.sin(cam.yaw);
+  let x1=x*cy - z*sy, z1=x*sy + z*cy;
+  const cp=Math.cos(cam.pitch), sp=Math.sin(cam.pitch);
+  let y1=y*cp - z1*sp, z2=y*sp + z1*cp;
+  let zc=z2+cam.dist;
+  if(zc<=0.1) return {sx:0,sy:0,depth:-1};
+  const f=330*cam.zoom;
+  return { sx:W/2 + x1*f/zc, sy:H/2 - y1*f/zc, depth:zc };
+}
+
+/* ---------- WebGL2 受控背景（暖白纸 + 极淡墨晕 + 蓝图网格） ---------- */
+const VS=`#version 300 es
+in vec2 aPos; void main(){ gl_Position=vec4(aPos,0.0,1.0); }`;
+const FS=`#version 300 es
+precision highp float; out vec4 o; uniform vec2 uRes; uniform float uTime;
+float hash(vec2 p){ return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453); }
+float vn(vec2 p){ vec2 i=floor(p),f=fract(p); f=f*f*(3.0-2.0*f);
+  float a=hash(i),b=hash(i+vec2(1,0)),c=hash(i+vec2(0,1)),d=hash(i+vec2(1,1));
+  return mix(mix(a,b,f.x),mix(c,d,f.x),f.y); }
+void main(){
+  vec2 uv=gl_FragCoord.xy/uRes;
+  vec3 paper=vec3(0.953,0.941,0.918);
+  float n=vn(uv*3.0 + uTime*0.015);
+  float wash=(n-0.5)*0.035;
+  vec2 g=uv*uRes/26.0; vec2 gl=abs(fract(g)-0.5);
+  float line=smoothstep(0.47,0.5,max(gl.x,gl.y));
+  vec3 grid=vec3(0.62,0.66,0.68)*line*0.16;
+  float vig=smoothstep(1.18,0.15,length(uv-0.5));
+  vec3 col=paper+wash-(1.0-vig)*0.028+grid;
+  o=vec4(clamp(col,0.0,1.0),1.0);
+}`;
+let GL=null, uRes=null, uTime=null;
+function bgFail(){ GL=null; const c=document.getElementById('bg'); if(c) c.style.display='none'; }
+function initGL(){
+  const c=document.getElementById('bg');
+  let gl=null;
+  try{ gl=c.getContext('webgl2',{antialias:true,alpha:false}); }catch(e){ gl=null; }
+  if(!gl){ bgFail(); return; }
+  function sh(type,src){ const s=gl.createShader(type); gl.shaderSource(s,src); gl.compileShader(s);
+    if(!gl.getShaderParameter(s,gl.COMPILE_STATUS)){ bgFail(); throw new Error('shader'); } return s; }
+  let p;
+  try{ const vs=sh(gl.VERTEX_SHADER,VS); const fs=sh(gl.FRAGMENT_SHADER,FS);
+    p=gl.createProgram(); gl.attachShader(p,vs); gl.attachShader(p,fs); gl.linkProgram(p);
+    if(!gl.getProgramParameter(p,gl.LINK_STATUS)){ bgFail(); return; }
+  }catch(e){ return; }
+  gl.useProgram(p);
+  const buf=gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER,buf);
+  gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1, 3,-1, -1,3]),gl.STATIC_DRAW);
+  const loc=gl.getAttribLocation(p,'aPos'); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc,2,gl.FLOAT,false,0,0);
+  uRes=gl.getUniformLocation(p,'uRes'); uTime=gl.getUniformLocation(p,'uTime');
+  GL={gl,p};
+}
+function drawGL(t){ if(!GL) return; const {gl,p}=GL; gl.useProgram(p);
+  gl.uniform2f(uRes,gl.canvas.width,gl.canvas.height); gl.uniform1f(uTime,t*0.001);
+  gl.drawArrays(gl.TRIANGLES,0,3); }
+
+/* ---------- Canvas2D 主舞台 ---------- */
+const cv=document.getElementById('cv'); const ctx=cv.getContext('2d');
+const bg=document.getElementById('bg'); const stage=document.getElementById('stage');
+const panel=document.getElementById('panel');
+let W=800,H=600;
+function resize(){
+  const r=stage.getBoundingClientRect();
+  W=Math.max(2,Math.floor(r.width)); H=Math.max(2,Math.floor(r.height));
+  const dpr=Math.min(2, window.devicePixelRatio||1);
+  cv.width=W*dpr; cv.height=H*dpr; cv.style.width=W+'px'; cv.style.height=H+'px'; ctx.setTransform(dpr,0,0,dpr,0,0);
+  bg.width=W*dpr; bg.height=H*dpr; bg.style.width=W+'px'; bg.style.height=H+'px';
+  if(GL){ GL.gl.viewport(0,0,bg.width,bg.height); }
+}
+
+function drawMember(a,b,cross,hl){
+  let alpha; const dN=clamp(( (a.depth+b.depth)*0.5 -6)/(26-6),0,1);
+  alpha=0.14+0.34*(1-dN);
+  ctx.lineWidth = cross?0.8:1.0;
+  if(hl){ ctx.strokeStyle='rgba(38,150,120,0.9)'; ctx.lineWidth=1.6; ctx.setLineDash([]); }
+  else { ctx.strokeStyle='rgba(46,64,60,'+alpha.toFixed(3)+')';
+    if(cross) ctx.setLineDash([3,3]); else ctx.setLineDash([]); }
+  ctx.beginPath(); ctx.moveTo(a.sx,a.sy); ctx.lineTo(b.sx,b.sy); ctx.stroke(); ctx.setLineDash([]);
+}
+function drawNode(i,p){
+  const n=nodes[i]; const r=2.6+n.score*0.7;
+  const L=30+46*(1-n.m);
+  const fill='hsl(176,28%,'+L.toFixed(1)+'%)';
+  const stroke = n.m<0.5 ? 'hsl(158,52%,40%)' : 'hsl(176,32%,20%)';
+  if(i===hoverId){ ctx.beginPath(); ctx.arc(p.sx,p.sy,r+5,0,Math.PI*2);
+    ctx.strokeStyle='rgba(38,150,120,0.8)'; ctx.lineWidth=1.2; ctx.stroke(); }
+  ctx.beginPath(); ctx.moveTo(p.sx,p.sy-r); ctx.lineTo(p.sx+r,p.sy); ctx.lineTo(p.sx,p.sy+r); ctx.lineTo(p.sx-r,p.sy); ctx.closePath();
+  ctx.fillStyle=fill; ctx.fill(); ctx.strokeStyle=stroke; ctx.lineWidth=1; ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(p.sx,p.sy-r*0.6); ctx.lineTo(p.sx+r*0.6,p.sy); ctx.lineTo(p.sx,p.sy+r*0.6); ctx.lineTo(p.sx-r*0.6,p.sy); ctx.closePath();
+  ctx.stroke();
+}
+
+let _nan=false,_onScreen=0;
+function render(){
+  ctx.clearRect(0,0,W,H);
+  const P=new Array(nodes.length); _nan=false; _onScreen=0;
+  for(let i=0;i<nodes.length;i++){
+    const p=project(nodes[i].x,nodes[i].y,nodes[i].z);
+    if(!p || p.depth<0){ P[i]=null; continue; }
+    if(!isFinite(p.sx)||!isFinite(p.sy)||!isFinite(p.depth)) _nan=true;
+    P[i]=p;
+    if(p.sx>=-20 && p.sx<=W+20 && p.sy>=-20 && p.sy<=H+20 && p.depth>0.1) _onScreen++;
+  }
+  // 杆件（远→近）
+  const md=[];
+  for(let k=0;k<members.length;k++){ const m=members[k]; const a=P[m[0]],b=P[m[1]];
+    if(!a||!b) continue; if(a.depth<=0.1||b.depth<=0.1) continue;
+    const hl = hoverId>=0 && (m[0]===hoverId||m[1]===hoverId);
+    md.push({a,b,cross:m[2]===1,hl,d:(a.depth+b.depth)*0.5}); }
+  md.sort((p,q)=>q.d-p.d);
+  for(const e of md) drawMember(e.a,e.b,e.cross,e.hl);
+  // 节点（远→近）
+  const nd=[]; for(let i=0;i<nodes.length;i++){ if(P[i]) nd.push({i,p:P[i]}); }
+  nd.sort((p,q)=>q.p.depth-p.p.depth);
+  for(const e of nd) drawNode(e.i,e.p);
+}
+
+function findHover(mx,my){
+  let best=-1, bd=14*14;
+  for(let i=0;i<nodes.length;i++){ const p=project(nodes[i].x,nodes[i].y,nodes[i].z);
+    if(!p||p.depth<=0.1) continue;
+    const dx=p.sx-mx, dy=p.sy-my, d=dx*dx+dy*dy;
+    if(d<bd){ bd=d; best=i; } }
+  return best;
+}
+function updatePanel(x,y){
+  if(hoverId<0){ panel.style.display='none'; return; }
+  const n=nodes[hoverId];
+  panel.style.display='block';
+  const px=clamp(x+14, 8, W-240), py=clamp(y+12, 54, H-130);
+  panel.style.left=px+'px'; panel.style.top=py+'px';
+  panel.innerHTML='<div class="name">'+n.name+'</div>'+
+    '<div class="row"><span>学科</span><b>'+subjects[n.sc]+'</b></div>'+
+    '<div class="row"><span>分值权重</span><b>'+n.score+'</b></div>'+
+    '<div class="row"><span>掌握度</span><b>'+(n.m*100).toFixed(0)+'%</b></div>'+
+    '<div class="row"><span>关联杆件</span><b>'+members.filter(m=>m[0]===hoverId||m[1]===hoverId).length+'</b></div>'+
+    '<span class="tag '+(n.m<0.5?'w':'m')+'">'+(n.m<0.5?'薄弱 · 待巩固':'已掌握')+'</span>';
+}
+function updateKPI(){
+  let m=0,w=0; for(const n of nodes){ if(n.m>0.5)m++; else w++; }
+  document.getElementById('kN').textContent=nodes.length;
+  document.getElementById('kM').textContent=m;
+  document.getElementById('kR').textContent=(m/nodes.length*100).toFixed(0)+'%';
+  document.getElementById('kW').textContent=w;
+  document.getElementById('kE').textContent=members.length;
+}
+
+/* ---------- 交互（真实操作驱动 · 确定可控） ---------- */
+let dragging=false,lastX=0,lastY=0,moved=0;
+function getXY(e){ const r=cv.getBoundingClientRect(); return [e.clientX-r.left, e.clientY-r.top]; }
+function onDown(e){ const p=getXY(e); dragging=true; lastX=p[0]; lastY=p[1]; moved=0; lastInteract=performance.now(); }
+function onMove(e){ const p=getXY(e);
+  if(dragging){ const dx=p[0]-lastX, dy=p[1]-lastY;
+    cam.yaw += -dx*0.005; cam.pitch=clamp(cam.pitch + -dy*0.005,-1.35,1.35);
+    cam.vyaw=-dx*0.005; cam.vpitch=-dy*0.005; lastX=p[0]; lastY=p[1]; moved+=Math.abs(dx)+Math.abs(dy);
+  } else { hoverId=findHover(p[0],p[1]); updatePanel(p[0],p[1]); } }
+function onUp(e){ const p=getXY(e); dragging=false;
+  if(moved<6){ const id=findHover(p[0],p[1]); if(id>=0){ nodes[id].mt = nodes[id].mt<0.5?1:0; focusOn(id); } }
+  lastInteract=performance.now(); }
+function onWheel(e){ e.preventDefault(); const f=e.deltaY<0?1.08:0.926; cam.zoom=clamp(cam.zoom*f,0.6,2.4); lastInteract=performance.now(); }
+function onKey(e){ if(e.key==='Escape') resetFocus(); }
+function onCtx(e){ e.preventDefault(); const p=getXY(e); const id=findHover(p[0],p[1]); if(id>=0){ nodes[id].mt=0; focusOn(id); } }
+function focusOn(id){ const n=nodes[id]; cam.ftx=n.x; cam.fty=n.y; cam.ftz=n.z; cam.fdist=9; focusId=id; }
+function resetFocus(){ cam.ftx=0; cam.fty=0; cam.ftz=0; cam.fdist=16; focusId=-1; }
+
+cv.addEventListener('pointerdown',onDown);
+window.addEventListener('pointermove',onMove);
+window.addEventListener('pointerup',onUp);
+cv.addEventListener('wheel',onWheel,{passive:false});
+window.addEventListener('keydown',onKey);
+cv.addEventListener('contextmenu',onCtx);
+window.addEventListener('resize',resize);
+
+/* ---------- 主循环 ---------- */
+let frameCount=0;
+function loop(t){
+  // 相机平滑（含聚焦飞入）
+  cam.tx += (cam.ftx-cam.tx)*0.10; cam.ty += (cam.fty-cam.ty)*0.10; cam.tz += (cam.ftz-cam.tz)*0.10;
+  cam.dist += (cam.fdist-cam.dist)*0.10;
+  // 惯性（∝真实拖速 · 快速收敛）
+  if(!dragging){ cam.yaw+=cam.vyaw; cam.pitch=clamp(cam.pitch+cam.vpitch,-1.35,1.35);
+    cam.vyaw*=0.9; cam.vpitch*=0.9; if(Math.abs(cam.vyaw)<1e-4)cam.vyaw=0; if(Math.abs(cam.vpitch)<1e-4)cam.vpitch=0; }
+  // 自动演示（静置 3s 缓慢自转）
+  if(performance.now()-lastInteract>3000 && !dragging){ cam.yaw+=0.0016; }
+  // 掌握度弹簧收敛
+  for(const n of nodes) n.m += (n.mt-n.m)*0.12;
+  drawGL(t); render();
+  // 探针
+  let m=0,w=0; for(const n of nodes){ if(n.m>0.5)m++; else w++; }
+  window.__probe={ nan:_nan, onScreen:_onScreen, total:nodes.length,
+    zoom:cam.zoom, zoomBounded:cam.zoom>=0.6&&cam.zoom<=2.4,
+    colorfulFilledCircles:false, lightBg:true, hasWebGLBg:!!GL,
+    focusId:focusId, mastered:m, weak:w, frame:frameCount++ };
+  requestAnimationFrame(loop);
+}
+
+/* ---------- 启动 ---------- */
+initGL(); resize(); updateKPI(); lastInteract=performance.now();
+// 暴露给无头探针
+window.__api={ onDown,onMove,onUp,onWheel,onKey,onCtx, getProbe:()=>window.__probe, nodes:()=>nodes, cam:()=>cam,
+  proj:(i)=>{ const n=nodes[i]; return project(n.x,n.y,n.z); } };
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>

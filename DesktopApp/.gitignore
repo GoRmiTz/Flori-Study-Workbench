@@ -1,0 +1,35 @@
+# ---- Build output ----
+build/
+# 沙箱绕过 CMake 的手动编链产物（cl/link 直编；真机走 CMake，不入库）
+build_obj/
+
+# ---- Screenshot self-test artifact (--shot mode) ----
+shot.png
+# Godot 时代遗留的导入描述文件（其 source_file 指向已删除的 res://OldP/...），不入库
+*.import
+*.ctex
+
+# ---- 视觉基线（S2-3）----
+# 基线是每台机器自己的：分辨率/DPI/字体渲染不同，跨机比对必然全红。
+# 所以基线不入库，本地跑 tools\shotdiff.ps1 -Mode baseline 自行固化。
+tools/baseline/
+
+# ---- Debug / intermediate residues (P0-4) ----
+*.obj
+*.bak
+*-bak
+nul
+*.ilk
+*.pdb
+
+# ---- Runtime logs ----
+*.log
+
+# ---- Editor / IDE ----
+.vs/
+*.suo
+
+# ---- 第三方授权 SDK（绝不入库）----
+# 历史第三方授权 SDK（如 Cubism SDK、GLEW）置于 third_party/，禁止提交。
+third_party/
+

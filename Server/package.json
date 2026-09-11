@@ -1,0 +1,15 @@
+{
+  "name": "flori-server",
+  "version": "1.0.0",
+  "description": "芙洛理 Flori 服务端 — 用户中心 / 数据同步 / 实时自习室 / 公共专栏（零第三方依赖）",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "smoke": "node tools/smoke.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "private": true,
+  "license": "UNLICENSED"
+}

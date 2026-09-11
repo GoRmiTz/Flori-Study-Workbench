@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ============================================================
+     芙洛理 Flori 桌面端 · Microsoft Store 打包清单（MSIX 模板）
+     用 Windows Application Packaging Project（VS 里的
+     "Windows 应用程序打包项目"）或 makeappx 打包成 .msixupload。
+
+     占位符（上传商店前由合作伙伴中心 / 你的证书填写）：
+       {Publisher}          —— 商店发布的发布者标识，形如
+                               "CN=XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX"
+       {PublisherDisplay}   —— 商店展示的发布者名称
+       {IdentityName}       —— 反向域风格包标识，如 "47987Flori.StudyPlan"
+       {Version}            —— 四位版本号，需 ≥ 客户端 kAppVersion
+     其余按注释调整。
+     ============================================================ -->
+<Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+         xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+         xmlns:uap5="http://schemas.microsoft.com/appx/manifest/uap/windows10/5"
+         xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+         IgnorableNamespaces="uap uap5 rescap">
+
+  <Identity Name="{IdentityName}"
+            Publisher="{Publisher}"
+            Version="{Version}"
+            ProcessorArchitecture="x64" />
+
+  <Properties>
+    <DisplayName>芙洛理 Flori</DisplayName>
+    <PublisherDisplayName>{PublisherDisplay}</PublisherDisplayName>
+    <Description>桌面常驻自习室 · 专注打卡 · 公共专栏 · 自习室实时协作</Description>
+    <Logo>assets\StoreLogo.png</Logo>
+  </Properties>
+
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.19041.0" MaxVersionTested="10.0.22621.0" />
+  </Dependencies>
+
+  <Resources>
+    <Resource Language="zh-CN" />
+    <Resource Language="en-US" />
+  </Resources>
+
+  <Applications>
+    <Application Id="App"
+                 Executable="Flori.exe"
+                 EntryPoint="Windows.FullTrustApplication">
+      <uap:VisualElements
+          DisplayName="芙洛理 Flori"
+          Description="桌面常驻自习室"
+          BackgroundColor="#6B2A35"
+          Square150x150Logo="assets\Square150x150Logo.png"
+          Square44x44Logo="assets\Square44x44Logo.png">
+        <uap:DefaultTile Wide310x150Logo="assets\Wide310x150Logo.png" />
+        <uap:SplashScreen Image="assets\SplashScreen.png" />
+      </uap:VisualElements>
+    </Application>
+  </Applications>
+
+  <Capabilities>
+    <rescap:Capability Name="runFullTrust" />
+    <Capability Name="internetClient" />
+  </Capabilities>
+</Package>

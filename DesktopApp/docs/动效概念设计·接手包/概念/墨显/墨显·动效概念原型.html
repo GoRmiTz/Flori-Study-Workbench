@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>墨显·知识显影</title>
+<style>
+  html,body{margin:0;height:100%;background:#F6F2E9;overflow:hidden;
+    font-family:"Songti SC","STSong","SimSun",serif;color:#2b2e33;
+    -webkit-user-select:none;user-select:none;}
+  #paper{position:fixed;inset:0;background:
+    radial-gradient(130% 120% at 50% 28%, #FBF8F1 0%, #F6F2E9 56%, #EDE7DB 100%);}
+  #bg{position:fixed;inset:0;width:100%;height:100%;}
+  #stage{position:fixed;inset:0;width:100%;height:100%;cursor:crosshair;}
+  .badge{position:fixed;left:18px;top:14px;font-size:12px;letter-spacing:.24em;color:#9a948a;pointer-events:none;}
+  .kpi{position:fixed;right:18px;top:13px;display:flex;gap:18px;font-size:13px;color:#6b675f;pointer-events:none;}
+  .kpi b{color:#268678;font-weight:600;}
+  .hint{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);font-size:12px;color:#9a948a;pointer-events:none;}
+  #card{position:fixed;display:none;width:340px;background:rgba(252,250,245,0.98);
+    border:1px solid #d8d2c4;border-radius:10px;box-shadow:0 10px 34px rgba(40,40,35,.14);
+    padding:18px 20px;font-size:14px;line-height:1.62;color:#2b2e33;z-index:5;}
+  #card h3{margin:0 0 4px;font-size:16px;}
+  #card .sub{font-size:12px;color:#9a948a;margin-bottom:10px;}
+  #card .body{font-size:13px;color:#3a3d42;margin-bottom:12px;}
+  #card .acts{display:flex;gap:10px;}
+  #card button{flex:1;padding:9px 0;border:none;border-radius:7px;font-size:13px;cursor:pointer;font-family:inherit;}
+  .b-known{background:#268678;color:#fff;}
+  .b-weak{background:#fff;color:#268678;border:1px solid #268678 !important;}
+  .b-close{background:transparent;color:#9a948a;}
+</style>
+</head>
+<body>
+<div id="paper"></div>
+<canvas id="bg"></canvas>
+<canvas id="stage"></canvas>
+<div class="badge">墨 显 · 知 识 显 影</div>
+<div class="kpi">
+  <span>已显影 <b id="kDev">0</b>/<span id="kTot">0</span></span>
+  <span>覆盖率 <b id="kCov">0%</b></span>
+  <span>待巩固 <b id="kPen">0</b></span>
+  <span>今日 <b id="kToday">0</b></span>
+</div>
+<div class="hint">移动光标如显影笔，扫过处知识自淡墨显出 · 点已显节点阅卷并标掌握</div>
+<div id="card">
+  <h3 id="cTitle"></h3>
+  <div class="sub" id="cSub"></div>
+  <div class="body" id="cBody"></div>
+  <div class="acts">
+    <button class="b-known" id="cKnown">已会 ✔</button>
+    <button class="b-weak" id="cWeak">待巩固 ↺</button>
+    <button class="b-close" id="cClose">收起</button>
+  </div>
+</div>
+<script>
+"use strict";
+/* ---------- 确定性 RNG ---------- */
+function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);
+  t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
+const rnd=mulberry32(20260822);
+
+/* ---------- 知识数据（来自练考 QuizParser 题库的确定性分域簇） ---------- */
+const SUBJECTS=[
+  {name:'常识判断',cx:0.17,cy:0.30},
+  {name:'言语理解',cx:0.40,cy:0.19},
+  {name:'数量关系',cx:0.63,cy:0.23},
+  {name:'判断推理',cx:0.83,cy:0.33},
+  {name:'资料分析',cx:0.21,cy:0.68},
+  {name:'申论',  cx:0.50,cy:0.76},
+  {name:'时政',  cx:0.79,cy:0.70},
+];
+const TITLES=[
+  '行政法基本原则','宪法修正案要点','宏观经济指标','党史关键会议',
+  '逻辑填空语境','片段阅读主旨','语句排序','成语辨析',
+  '行程问题','排列组合','概率初步','数字推理','几何换算',
+  '图形推理','定义判断','类比推理','逻辑判断','三段论',
+  '资料增速','比重计算','倍数分析','趋势研判',
+  '归纳概括','提出对策','综合分析','应用文写作','大作文立意',
+  '二十大报告','中央一号文件','新质生产力','科技成就','外交主张',
+  '行政诉讼时效','民法善意取得','刑法因果关系','行政许可',
+  '病句辨析','修辞手法','标点符号','词语搭配',
+  '和差倍比','最值问题','容斥原理','牛吃草',
+  '加强削弱','前提假设','解释评价','平行结构',
+  '名义GDP','基尼系数','CPI与PPI','财政赤字',
+  '公文格式','会议纪要与决议','调研报告','信访处理',
+  '乡村振兴','共同富裕','碳达峰碳中和','一带一路',
+  '航天工程','人工智能伦理','生物育种','海洋战略',
+  '行政复议范围','行政处罚种类','行政强制','国家赔偿',
+  '实词辨析','关联词','语序衔接','下定义',
+  '溶液浓度','工程问题','周期问题','钟表问题',
+  '论证结构','谬误识别','科学归纳','类比论证',
+  '人均可支配收入','恩格尔系数','人口结构','产业升级',
+  '讲话稿','倡议书','公开信','工作方案'
+];
+const NODES=[];
+TITLES.forEach((t,i)=>{
+  const s=i%SUBJECTS.length;
+  const c=SUBJECTS[s];
+  const ang=rnd()*Math.PI*2, rad=(0.05+rnd()*0.10);
+  const x=c.cx+Math.cos(ang)*rad, y=c.cy+Math.sin(ang)*rad*0.92;
+  const weak=rnd()<0.42;
+  const mastery=weak?(0.18+rnd()*0.26):(0.60+rnd()*0.34);
+  NODES.push({id:i,sub:s,x,y,title:t,
+    note:weak?'该考点掌握度偏低，建议结合真题重做一遍。':'已具备基础，可进入变式与提速训练。',
+    q:weak?'请回忆该考点的核心判定规则，并举一例。':'请用自己的话复述该考点的关键结论。',
+    mastery:mastery,imp:0.5+rnd()*0.5,
+    reveal:0.12,developed:false});
+});
+const EDGES=[];
+NODES.forEach(n=>{
+  const same=NODES.filter(o=>o.sub===n.sub&&o.id!==n.id);
+  const a=NODES[(n.id+1)%NODES.length];
+  if(a.sub===n.sub) EDGES.push([n.id,a.id]);
+  // 跨科近邻
+  let best=null,bd=1e9;
+  NODES.forEach(o=>{if(o.sub===n.sub)return;const d=(o.x-n.x)**2+(o.y-n.y)**2;if(d<bd){bd=d;best=o;}});
+  if(best&&rnd()<0.5) EDGES.push([n.id,best.id]);
+});
+
+/* ---------- 状态 ---------- */
+const known=new Set(), pending=new Set();
+let today=0, openId=-1, hoverId=-1;
+const cursor={x:-1e4,y:-1e4};
+const DEV_R=96; // 显影半径(px)
+
+/* ---------- 画布 ---------- */
+const stage=document.getElementById('stage');
+const ctx=stage.getContext('2d');
+let W=0,H=0,DPR=1;
+function resize(){
+  DPR=Math.min(2,window.devicePixelRatio||1);
+  W=window.innerWidth;H=window.innerHeight;
+  stage.width=Math.floor(W*DPR);stage.height=Math.floor(H*DPR);
+  stage.style.width=W+'px';stage.style.height=H+'px';
+  ctx.setTransform(DPR,0,0,DPR,0,0);
+}
+window.addEventListener('resize',resize);
+
+function nodeScreen(n){return {x:n.x*W, y:n.y*H};}
+function dist(ax,ay,bx,by){return Math.hypot(ax-bx,ay-by);}
+function evPos(e){const r=stage.getBoundingClientRect();return {x:(e.clientX-r.left),y:(e.clientY-r.top)};}
+
+/* ---------- 颜色（克制：墨灰 + 单一青绿描边） ---------- */
+function inkAlpha(a){return 'rgba(43,46,51,'+a.toFixed(3)+')';}
+function weakStroke(a){return 'rgba(38,134,120,'+a.toFixed(3)+')';}
+function grayFill(a){return 'rgba(120,124,130,'+a.toFixed(3)+')';}
+const GREEN='rgb(38,134,120)';
+
+/* 运行时彩色圆检测（真实校验，非装饰） */
+let lastNodeFills=[];
+function classifyFill(s){
+  // 允许：墨灰(r=g=b 近似) 或 青绿
+  const m=s.match(/rgba?\(([\d.]+),([\d.]+),([\d.]+)/);
+  if(!m) return true;
+  const r=+m[1],g=+m[2],b=+m[3];
+  if(Math.abs(r-g)<20&&Math.abs(g-b)<20) return true; // 灰
+  if(Math.abs(r-38)<14&&Math.abs(g-134)<14&&Math.abs(b-120)<14) return true; // 青绿
+  return false;
+}
+
+/* ---------- 交互 ---------- */
+function onMove(e){const p=evPos(e);cursor.x=p.x;cursor.y=p.y;
+  hoverId=-1;let bd=14;
+  NODES.forEach(n=>{if(!n.developed)return;const s=nodeScreen(n);const d=dist(p.x,p.y,s.x,s.y);if(d<bd){bd=d;hoverId=n.id;}});}
+function onDown(e){const p=evPos(e);cursor.x=p.x;cursor.y=p.y;}
+function onClick(e){
+  const p=evPos(e);
+  let hit=-1,bd=14;
+  NODES.forEach(n=>{if(!n.developed)return;const s=nodeScreen(n);const d=dist(p.x,p.y,s.x,s.y);if(d<bd){bd=d;hit=n.id;}});
+  if(hit>=0) openCard(hit);
+}
+function onKey(e){if((e.key==='Escape')) closeCard();}
+stage.addEventListener('mousemove',onMove);
+stage.addEventListener('mousedown',onDown);
+stage.addEventListener('click',onClick);
+window.addEventListener('keydown',onKey);
+
+function openCard(id){
+  openId=id;const n=NODES[id];
+  document.getElementById('cTitle').textContent=n.title;
+  document.getElementById('cSub').textContent=SUBJECTS[n.sub].name+' · 掌握度 '+Math.round(n.mastery*100)+'%';
+  document.getElementById('cBody').textContent=n.note+'\n\n【主动回忆】'+n.q;
+  document.getElementById('card').style.display='block';
+}
+function closeCard(){openId=-1;document.getElementById('card').style.display='none';}
+document.getElementById('cClose').onclick=closeCard;
+document.getElementById('cKnown').onclick=()=>{if(openId<0)return;known.add(openId);today++;closeCard();};
+document.getElementById('cWeak').onclick=()=>{if(openId<0)return;pending.add(openId);today++;closeCard();};
+
+/* ---------- 更新 / 绘制 ---------- */
+function update(){
+  NODES.forEach(n=>{
+    const s=nodeScreen(n);
+    const near=dist(cursor.x,cursor.y,s.x,s.y)<DEV_R;
+    const target=near?1:(n.developed?1:0.12);
+    if(target>n.reveal) n.reveal+=(target-n.reveal)*0.16;
+    else n.reveal-=(n.reveal-target)*0.05;
+    if(n.reveal<0.12)n.reveal=0.12; if(n.reveal>1)n.reveal=1;
+    if(n.reveal>0.55)n.developed=true;
+  });
+}
+function drawEdge(a,b){
+  const na=NODES[a],nb=NODES[b];
+  const er=Math.min(na.reveal,nb.reveal);
+  if(er<0.18)return;
+  const sa=nodeScreen(na),sb=nodeScreen(nb);
+  ctx.strokeStyle='rgba(43,46,51,'+(er*0.45).toFixed(3)+')';
+  ctx.lineWidth=0.4+na.imp*0.9*er;
+  ctx.beginPath();ctx.moveTo(sa.x,sa.y);ctx.lineTo(sb.x,sb.y);ctx.stroke();
+}
+function drawNode(n){
+  const s=nodeScreen(n);const r=4+n.imp*5;
+  const a=n.reveal;
+  // 关联光晕(确定性，非辉光bloom)：仅当悬停时一圈极淡青环
+  if(n.id===hoverId){
+    ctx.strokeStyle=weakStroke(0.5);ctx.lineWidth=1;
+    ctx.beginPath();ctx.arc(s.x,s.y,r+6,0,7);ctx.stroke();
+  }
+  // 菱形节点：墨色浓度=掌握度；薄弱=淡灰填充+青绿描边
+  ctx.save();ctx.translate(s.x,s.y);ctx.rotate(Math.PI/4);
+  ctx.fillStyle=(n.mastery<0.5)?grayFill(a):inkAlpha(a);
+  lastNodeFills.push((n.mastery<0.5)?grayFill(a):inkAlpha(a));
+  ctx.fillRect(-r/2,-r/2,r,r);
+  ctx.restore();
+  ctx.strokeStyle=(n.mastery<0.5)?weakStroke(a):inkAlpha(a*0.9);
+  ctx.lineWidth=1.1;
+  ctx.save();ctx.translate(s.x,s.y);ctx.rotate(Math.PI/4);
+  ctx.strokeRect(-r/2,-r/2,r,r);ctx.restore();
+  // 标题（仅显影充分且悬停时，信息可视化克制）
+  if(a>0.7&&n.id===hoverId){
+    ctx.fillStyle='rgba(43,46,51,0.85)';ctx.font='12px "Songti SC",serif';
+    ctx.textAlign='center';ctx.fillText(n.title,s.x,s.y-r-8);ctx.textAlign='left';
+  }
+}
+function draw(){
+  ctx.clearRect(0,0,W,H);
+  lastNodeFills=[];
+  EDGES.forEach(e=>drawEdge(e[0],e[1]));
+  // 显影笔触（光标处一圈极淡青晕，确定可控）
+  if(cursor.x>0){
+    const g=ctx.createRadialGradient(cursor.x,cursor.y,4,cursor.x,cursor.y,DEV_R);
+    g.addColorStop(0,'rgba(38,134,120,0.05)');g.addColorStop(1,'rgba(38,134,120,0)');
+    ctx.fillStyle=g;ctx.beginPath();ctx.arc(cursor.x,cursor.y,DEV_R,0,7);ctx.fill();
+  }
+  NODES.forEach(drawNode);
+}
+
+/* ---------- KPI ---------- */
+function refreshKPI(){
+  let dev=0;NODES.forEach(n=>{if(n.reveal>0.5)dev++;});
+  document.getElementById('kDev').textContent=dev;
+  document.getElementById('kTot').textContent=NODES.length;
+  document.getElementById('kCov').textContent=Math.round(known.size/NODES.length*100)+'%';
+  document.getElementById('kPen').textContent=pending.size;
+  document.getElementById('kToday').textContent=today;
+}
+
+/* ---------- 主循环（手动 pump 供无头） ---------- */
+let _now=0,running=true;
+function frame(t){
+  update();draw();refreshKPI();
+  if(running&&typeof requestAnimationFrame==='function')requestAnimationFrame(frame);
+}
+resize();
+if(typeof requestAnimationFrame==='function')requestAnimationFrame(frame);
+
+/* ---------- WebGL2 受控背景（淡墨晕舆纸；失败即隐藏，CSS 纸纹兜底，绝不黑屏） ---------- */
+(function bg(){
+  try{
+    const cv=document.getElementById('bg');
+    const gl=cv.getContext('webgl2');
+    if(!gl)throw new Error('no webgl2');
+    cv.width=Math.floor(window.innerWidth);cv.height=Math.floor(window.innerHeight);
+    const vs='#version 300 es\nin vec2 p;void main(){gl_Position=vec4(p,0.,1.);}';
+    const fs='#version 300 es\nprecision mediump float;out vec4 o;'+
+      'uniform vec2 u;float h(vec2 x){return fract(sin(dot(x,vec2(41.3,289.1)))*43758.5);}'+
+      'void main(){vec2 uv=gl_FragCoord.xy/u;float v=smoothstep(1.1,0.2,length(uv-0.5));'+
+      'float grain=h(gl_FragCoord.xy)*0.025;'+
+      'vec3 paper=mix(vec3(0.937,0.910,0.867),vec3(0.984,0.973,0.945),v);'+
+      'paper-=grain;o=vec4(paper,1.);}';
+    function sh(t,s){const o=gl.createShader(t);gl.shaderSource(o,s);gl.compileShader(o);
+      if(!gl.getShaderParameter(o,gl.COMPILE_STATUS))throw new Error('sh '+gl.getShaderInfoLog(o));return o;}
+    const pr=gl.createProgram();gl.attachShader(pr,sh(gl.VERTEX_SHADER,vs));
+    gl.attachShader(pr,sh(gl.FRAGMENT_SHADER,fs));gl.linkProgram(pr);
+    if(!gl.getProgramParameter(pr,gl.LINK_STATUS))throw new Error('link');
+    const buf=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,buf);
+    gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,3,-1,-1,3]),gl.STATIC_DRAW);
+    const loc=gl.getAttribLocation(pr,'p');gl.enableVertexAttribArray(loc);
+    gl.vertexAttribPointer(loc,2,gl.FLOAT,false,0,0);
+    gl.useProgram(pr);gl.uniform2f(gl.getUniformLocation(pr,'u'),cv.width,cv.height);
+    gl.viewport(0,0,cv.width,cv.height);gl.drawArrays(gl.TRIANGLES,0,3);
+    window.__hasWebGLBg=true;
+  }catch(err){
+    const cv=document.getElementById('bg');if(cv)cv.style.display='none';
+    window.__hasWebGLBg=false;
+  }
+})();
+
+/* ---------- 探针接口 ---------- */
+window.__api={
+  onMove:(e)=>onMove(e),onDown:(e)=>onDown(e),onClick:(e)=>onClick(e),onKey:(e)=>onKey(e),
+  pump:(n)=>{for(let i=0;i<(n||1);i++){_now+=16;update();draw();refreshKPI();}},
+  nodes:()=>NODES,
+  nodeScreen:(id)=>nodeScreen(NODES[id]),
+  openNodeById:(id)=>openCard(id),
+  markKnown:()=>{if(openId<0)return;known.add(openId);today++;closeCard();},
+  markWeak:()=>{if(openId<0)return;pending.add(openId);today++;closeCard();},
+  closeCard,
+  getProbe:()=>{
+    let dev=0,nan=false,viol=0;
+    NODES.forEach(n=>{if(n.reveal>0.5)dev++;if(!isFinite(n.reveal))nan=true;});
+    lastNodeFills.forEach(f=>{if(!classifyFill(f))viol++;});
+    return {devCount:dev,total:NODES.length,
+      cov:Math.round(known.size/NODES.length*100),pen:pending.size,today:today,
+      known:known.size,openId:openId,nan:nan,
+      lightBg:getComputedStyle(document.getElementById('paper')).backgroundColor.indexOf('246')>=0,
+      colorfulCircles:viol,hasWebGLBg:window.__hasWebGLBg===true};
+  }
+};
+window.__ready=true;
+</script>
+</body>
+</html>

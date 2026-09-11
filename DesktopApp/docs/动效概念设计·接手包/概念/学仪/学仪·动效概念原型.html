@@ -1,0 +1,283 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>学仪 · 知识刻线仪 · 动效概念原型</title>
+<style>
+  :root{
+    --bg0:#f6f3ec; --bg1:#efe9dd; --ink:#23302c; --mut:#6c7a73;
+    --line:#c4cabf; --line2:#d8dcd2; --accent:#0f9e86;
+    --topbg:rgba(255,255,255,.92); --panelbg:rgba(255,255,255,.94);
+  }
+  *{box-sizing:border-box;margin:0;padding:0;}
+  html,body{height:100%;background:var(--bg0);color:var(--ink);
+    font:13px/1.5 "Segoe UI",system-ui,"PingFang SC","Microsoft YaHei",sans-serif;
+    overflow:hidden;-webkit-font-smoothing:antialiased;}
+  #c{position:fixed;inset:0;display:block;cursor:grab;}
+  #c.drag{cursor:grabbing;}
+  #top{position:fixed;top:0;left:0;right:0;height:46px;display:flex;align-items:center;gap:6px;
+    padding:0 16px;background:linear-gradient(180deg,var(--topbg),rgba(255,255,255,.7));
+    border-bottom:1px solid var(--line);backdrop-filter:blur(6px);z-index:8;}
+  #top .brand{font-weight:600;letter-spacing:.6px;color:var(--accent);margin-right:6px;display:flex;align-items:center;gap:7px;}
+  #top .brand .mk{width:13px;height:13px;transform:rotate(45deg);border:1.5px solid var(--accent);}
+  #top .tab{padding:6px 12px;border-radius:7px;color:var(--mut);cursor:default;border:1px solid transparent;font-weight:600;background:rgba(15,158,134,.12);color:var(--accent);}
+  #top .sp{flex:1;}
+  #top .avatar{width:26px;height:26px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#bfe9dc,#2f6f63);border:1px solid var(--line);}
+  #kpi{position:fixed;top:54px;left:0;right:0;display:flex;gap:26px;padding:8px 18px;color:var(--mut);z-index:7;font-size:12px;pointer-events:none;}
+  #kpi b{color:var(--ink);font-weight:600;font-variant-numeric:tabular-nums;}
+  #panel{position:fixed;min-width:198px;padding:12px 14px;border-radius:11px;z-index:9;
+    background:var(--panelbg);border:1px solid var(--line);
+    box-shadow:0 10px 34px rgba(40,60,55,.16);opacity:0;transform:translateY(6px);
+    transition:opacity .14s,transform .14s;pointer-events:none;}
+  #panel.show{opacity:1;transform:translateY(0);}
+  #panel .t{font-weight:600;color:var(--ink);margin-bottom:7px;font-size:13px;display:flex;align-items:center;gap:7px;}
+  #panel .t .mk{width:10px;height:10px;transform:rotate(45deg);background:var(--accent);}
+  #panel .row{display:flex;justify-content:space-between;gap:18px;color:var(--mut);font-size:12px;margin:3px 0;}
+  #panel .row b{color:var(--ink);font-weight:600;font-variant-numeric:tabular-nums;}
+  #panel .bar{height:5px;border-radius:3px;background:var(--line2);margin-top:7px;overflow:hidden;}
+  #panel .bar i{display:block;height:100%;background:var(--accent);}
+  #hint{position:fixed;left:18px;bottom:14px;color:var(--mut);font-size:12px;line-height:1.7;z-index:6;pointer-events:none;max-width:380px;}
+  #hint kbd{background:rgba(15,158,134,.1);border:1px solid var(--line);border-radius:4px;padding:1px 6px;color:var(--ink);font-size:11px;}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="top">
+  <div class="brand"><span class="mk"></span>学仪 · 知识刻线仪</div>
+  <div class="tab">动效概念 · 概念17</div>
+  <div class="sp"></div>
+  <div class="avatar"></div>
+</div>
+<div id="kpi"></div>
+<div id="panel"></div>
+<div id="hint">
+  <b>拨动仪器</b>：在盘面拖拽即可转动刻度环（松手有惯性，按你拖速收住）&nbsp;·&nbsp;
+  <kbd>悬停</kbd> 读取刻度读数&nbsp;·&nbsp;<kbd>点击</kbd> 锁定游标聚焦&nbsp;·&nbsp;<kbd>滚轮</kbd> 缩放
+</div>
+
+<script>
+(()=>{
+"use strict";
+const cv=document.getElementById('c'), ctx=cv.getContext('2d');
+const panel=document.getElementById('panel'), kpiEl=document.getElementById('kpi');
+let W=0,H=0,DPR=Math.max(1,Math.min(2,window.devicePixelRatio||1));
+function resize(){ W=innerWidth; H=innerHeight;
+  cv.width=W*DPR; cv.height=H*DPR; ctx.setTransform(DPR,0,0,DPR,0,0); }
+addEventListener('resize',resize); resize();
+
+/* ---------- 确定性随机（可复现布局） ---------- */
+function mulberry32(a){return function(){a|=0;a=(a+0x6D2B79F5)|0;let t=Math.imul(a^(a>>>15),1|a);t=(t+Math.imul(t^(t>>>7),61|t))^t;return((t^(t>>>14))>>>0)/4294967296;};}
+const rnd=mulberry32(20260817);
+
+/* ---------- 数据：学仪 = 古典刻线仪器 ---------- */
+const SUBJ=["行测·言语","行测·判断","行测·数量","行测·资料","申论","常识","专业科目","时政"];
+const NS=SUBJ.length;
+const perDom=[14,12,11,12,13,10,9,12];
+const RING0=92, RING_STEP=23;            // 8 个同心刻度环 = 8 学科（径向位置区分，不用彩色）
+const TAU=Math.PI*2;
+const nodes=[]; let id=0;
+let totalMast=0, totalN=0;
+for(let s=0;s<NS;s++){
+  const n=perDom[s];
+  // 每个学科内按掌握度排序沿环铺开 → 环上"梯度"可读
+  const arr=[];
+  for(let k=0;k<n;k++){ const m=Math.round(8+rnd()*92); arr.push({m, imp:1+Math.floor(rnd()*3), core:rnd()<0.14}); }
+  arr.sort((a,b)=>a.m-b.m);
+  const arcStart=s*(TAU/NS)+0.12, arcEnd=(s+1)*(TAU/NS)-0.12;
+  arr.forEach((o,k)=>{
+    const t=n>1?k/(n-1):0.5;
+    const ang=arcStart+t*(arcEnd-arcStart);
+    nodes.push({id:id++, s, baseAng:ang, m:o.m, imp:o.imp, core:o.core,
+      r:RING0+s*RING_STEP, sx:0, sy:0, pulse:0, born:1-(id*0.004)});
+    totalMast+=o.m; totalN++;
+  });
+}
+const adj=nodes.map(()=>[]); const links=[];
+function addL(i,j){ if(i===j||adj[i].includes(j))return; adj[i].push(j); adj[j].push(i); links.push({i,j}); }
+// 同环相邻 + 少量跨环参考线（细刻线）
+for(let s=0;s<NS;s++){ const g=nodes.filter(x=>x.s===s);
+  for(let k=0;k<g.length;k++){ if(rnd()<0.78) addL(g[k].id, g[(k+1)%g.length].id); }
+}
+for(let b=0;b<16;b++){ const i=Math.floor(rnd()*nodes.length), j=Math.floor(rnd()*nodes.length); if(nodes[i].s!==nodes[j].s) addL(i,j); }
+const avgMast=Math.round(totalMast/totalN);
+
+/* ---------- 视图状态 ---------- */
+let rot=0, zoom=1, angVel=0, lastAng=0, dragging=false, moved=false, downX=0, downY=0;
+let cx=W/2, cy=H/2-6;
+let hovered=-1, selected=-1, lastInteract=performance.now();
+
+/* ---------- 交互 ---------- */
+function ptrAng(x,y){ return Math.atan2(y-cy, x-cx); }
+cv.addEventListener('mousedown',e=>{ dragging=true; moved=false; downX=e.clientX; downY=e.clientY;
+  lastAng=ptrAng(e.clientX,e.clientY); lastInteract=performance.now(); cv.classList.add('drag'); });
+addEventListener('mousemove',e=>{
+  if(dragging){
+    const a=ptrAng(e.clientX,e.clientY);
+    let d=a-lastAng; while(d>Math.PI)d-=TAU; while(d<-Math.PI)d+=TAU;   // 解缠
+    rot+=d; angVel=d; lastAng=a;
+    if(Math.abs(e.clientX-downX)+Math.abs(e.clientY-downY)>3) moved=true;
+    lastInteract=performance.now();
+  } else {
+    hovered=hitTest(e.clientX,e.clientY);
+    lastInteract=performance.now();
+  }
+});
+addEventListener('mouseup',e=>{
+  if(dragging && !moved){ const i=hitTest(e.clientX,e.clientY); if(i>=0){ selected=(selected===i?-1:i); } }
+  dragging=false; cv.classList.remove('drag'); lastInteract=performance.now();
+});
+cv.addEventListener('wheel',e=>{ e.preventDefault();
+  zoom=Math.max(0.6,Math.min(2.4, zoom*(e.deltaY<0?1.08:0.926))); lastInteract=performance.now();
+},{passive:false});
+
+function hitTest(x,y){ let best=-1, bd=18;
+  for(const f of nodes){ const d=Math.hypot(f.sx-x, f.sy-y); if(d<bd){ bd=d; best=f.id; } }
+  return best;
+}
+
+/* ---------- 绘制 ---------- */
+function draw(){
+  cx=W/2; cy=H/2-6;
+  // 背景：纸感 + 细网格（全是线，无彩圆）
+  const g=ctx.createRadialGradient(cx,cy,40,cx,cy,Math.max(W,H)*0.62);
+  g.addColorStop(0,'#faf8f2'); g.addColorStop(1,'#ece5d8');
+  ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+  ctx.strokeStyle='rgba(150,160,150,.10)'; ctx.lineWidth=1;
+  const grid=46;
+  for(let x=(cx%grid);x<W;x+=grid){ ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,H); ctx.stroke(); }
+  for(let y=(cy%grid);y<H;y+=grid){ ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(W,y); ctx.stroke(); }
+
+  const R0=RING0*zoom, step=RING_STEP*zoom;
+  const outerR=R0+(NS-1)*step+30;
+
+  // 1) 同心刻度环（细刻线，无填充）
+  ctx.lineWidth=1;
+  for(let s=0;s<NS;s++){
+    const rr=R0+s*step;
+    ctx.strokeStyle = (selected>=0 && nodes[selected].s===s) ? 'rgba(15,158,134,.55)' : 'rgba(120,134,124,.30)';
+    ctx.beginPath(); ctx.arc(cx,cy,rr,0,TAU); ctx.stroke();
+    // 刻度齿
+    const ticks=60;
+    for(let t=0;t<ticks;t++){ const a=t*(TAU/ticks)+rot;
+      const major=(t%5===0);
+      const r1=rr, r2=rr+(major?7:3.5);
+      ctx.strokeStyle = (selected>=0&&nodes[selected].s===s)?'rgba(15,158,134,.5)':'rgba(120,134,124,.34)';
+      ctx.beginPath();
+      ctx.moveTo(cx+Math.cos(a)*r1, cy+Math.sin(a)*r1);
+      ctx.lineTo(cx+Math.cos(a)*r2, cy+Math.sin(a)*r2); ctx.stroke();
+    }
+    // 学科名（沿环外缘，小字）
+    const midAng=(s+0.5)*(TAU/NS)+rot;
+    const lx=cx+Math.cos(midAng)*(rr+16), ly=cy+Math.sin(midAng)*(rr+16);
+    ctx.save(); ctx.translate(lx,ly); ctx.rotate(midAng+Math.PI/2);
+    ctx.fillStyle=(selected>=0&&nodes[selected].s===s)?'#0f9e86':'rgba(80,92,84,.72)';
+    ctx.font='600 11px "PingFang SC",sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.fillText(SUBJ[s],0,0); ctx.restore();
+  }
+
+  // 2) 放射辐条（学科分隔刻线）
+  ctx.strokeStyle='rgba(120,134,124,.22)'; ctx.lineWidth=1;
+  for(let s=0;s<NS;s++){ const a=s*(TAU/NS)+rot;
+    ctx.beginPath(); ctx.moveTo(cx+Math.cos(a)*R0*0.42, cy+Math.sin(a)*R0*0.42);
+    ctx.lineTo(cx+Math.cos(a)*outerR, cy+Math.sin(a)*outerR); ctx.stroke();
+  }
+
+  // 3) 关联细线（刻线连接）
+  ctx.lineWidth=0.8;
+  for(const lk of links){ const a=nodes[lk.i], b=nodes[lk.j];
+    const sel = (selected>=0 && (lk.i===selected||lk.j===selected));
+    ctx.strokeStyle = sel ? 'rgba(15,158,134,.45)' : 'rgba(120,134,124,.16)';
+    ctx.beginPath(); ctx.moveTo(a.sx,a.sy); ctx.lineTo(b.sx,b.sy); ctx.stroke();
+  }
+
+  // 4) 节点（落于环上的小菱形，灰阶明度=掌握度；强调=青绿描边）
+  for(const f of nodes){
+    const a=f.baseAng+rot;
+    const rr=R0 + f.s*step;
+    f.sx=cx+Math.cos(a)*rr; f.sy=cy+Math.sin(a)*rr;
+    const dim = (selected>=0 && f.s!==nodes[selected].s) ? 0.42 : 1;
+    const hl = (f.id===hovered)||(f.id===selected);
+    const r=(3.0+f.imp*1.25)*zoom;
+    const L = 30 + f.m*0.5;                 // 灰阶明度编码掌握度（单色，无五颜六色）
+    ctx.save(); ctx.translate(f.sx,f.sy);
+    ctx.beginPath(); ctx.moveTo(0,-r); ctx.lineTo(r*0.74,0); ctx.lineTo(0,r); ctx.lineTo(-r*0.74,0); ctx.closePath();
+    ctx.fillStyle='hsla(168,14%,'+L+'%,'+(0.85*dim)+')';
+    ctx.fill();
+    ctx.lineWidth=hl?1.8:1; ctx.strokeStyle=hl?'#0f9e86':'rgba(40,60,54,'+(0.55*dim)+')';
+    ctx.stroke();
+    if(f.core && dim>0.5){ ctx.beginPath(); ctx.moveTo(0,-r*0.5); ctx.lineTo(r*0.34,0); ctx.lineTo(0,r*0.5); ctx.lineTo(-r*0.34,0); ctx.closePath();
+      ctx.fillStyle='rgba(15,158,134,'+(0.9*dim)+')'; ctx.fill(); }
+    // 入场线描：随角度展开（确定性）
+    if(hl){ ctx.beginPath(); ctx.arc(0,0,r+5,0,TAU); ctx.strokeStyle='#0f9e86'; ctx.lineWidth=1; ctx.stroke(); }
+    if(f.pulse>0.02){ ctx.beginPath(); ctx.arc(0,0,r+4+f.pulse*8,0,TAU);
+      ctx.strokeStyle='rgba(15,158,134,'+(f.pulse*0.5)+')'; ctx.lineWidth=1; ctx.stroke(); f.pulse*=0.92; }
+    ctx.restore();
+  }
+
+  // 5) 中心知识核（小菱形 + 细环，非彩圆）
+  ctx.save(); ctx.translate(cx,cy);
+  ctx.strokeStyle='rgba(120,134,124,.5)'; ctx.lineWidth=1;
+  ctx.beginPath(); ctx.arc(0,0,R0*0.42,0,TAU); ctx.stroke();
+  const cr=9*zoom;
+  ctx.beginPath(); ctx.moveTo(0,-cr); ctx.lineTo(cr*0.78,0); ctx.lineTo(0,cr); ctx.lineTo(-cr*0.78,0); ctx.closePath();
+  ctx.fillStyle='rgba(15,158,134,.16)'; ctx.fill();
+  ctx.lineWidth=1.6; ctx.strokeStyle='#0f9e86'; ctx.stroke();
+  ctx.fillStyle='rgba(80,92,84,.8)'; ctx.font='600 10px "PingFang SC",sans-serif'; ctx.textAlign='center';
+  ctx.fillText('知识核',0,R0*0.42+13);
+  ctx.restore();
+
+  // 6) 游标指针（alidade）：指向悬停/选中点，或自动巡扫
+  let aimAng;
+  if(hovered>=0) aimAng=nodes[hovered].baseAng+rot;
+  else if(selected>=0) aimAng=nodes[selected].baseAng+rot;
+  else { const t=(performance.now()*0.00018)%1; aimAng=t*TAU+rot; }
+  ctx.save(); ctx.translate(cx,cy);
+  ctx.rotate(aimAng);
+  ctx.strokeStyle= (hovered>=0||selected>=0)?'rgba(15,158,134,.9)':'rgba(120,134,124,.4)';
+  ctx.lineWidth=1.4; ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(outerR,0); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(outerR-10,0); ctx.lineTo(outerR,0); ctx.lineTo(outerR-6,-5); ctx.closePath();
+  ctx.fillStyle=ctx.strokeStyle; ctx.fill();
+  ctx.restore();
+
+  // 顶栏 KPI
+  const mastered=nodes.filter(f=>f.m>=70).length;
+  kpiEl.innerHTML='<span>考点 <b>'+nodes.length+'</b></span><span>学科 <b>'+NS+'</b></span>'+
+    '<span>已掌握 <b>'+mastered+'</b></span><span>平均掌握 <b>'+avgMast+'%</b></span>'+
+    '<span>关联刻线 <b>'+links.length+'</b></span>';
+
+  // 面板
+  const showId=(hovered>=0?hovered:selected);
+  if(showId>=0){ const f=nodes[showId];
+    panel.classList.add('show'); panel.style.left=Math.min(W-220,f.sx+16)+'px'; panel.style.top=Math.max(54,Math.min(H-150,f.sy-10))+'px';
+    panel.innerHTML='<div class="t"><span class="mk"></span>'+SUBJ[f.s]+' · 刻度点 #'+(f.id%perDom[f.s]+1)+'</div>'+
+      '<div class="row"><span>掌握度</span><b>'+f.m+'%</b></div>'+
+      '<div class="row"><span>重要度</span><b>'+(f.imp===3?'高':f.imp===2?'中':'基础')+'</b></div>'+
+      '<div class="row"><span>类型</span><b>'+(f.core?'核心节点':'常规')+'</b></div>'+
+      '<div class="row"><span>关联</span><b>'+adj[f.id].length+' 条刻线</b></div>'+
+      '<div class="bar"><i style="width:'+f.m+'%"></i></div>';
+  } else panel.classList.remove('show');
+}
+
+/* ---------- 主循环 ---------- */
+function tick(){
+  if(!dragging){
+    if(Math.abs(angVel)>1e-4){ rot+=angVel; angVel*=0.9; }      // 惯性∝拖速、快收敛
+    else if(performance.now()-lastInteract>4000){ rot+=0.0016; } // 静置自动巡扫
+  }
+  draw();
+  requestAnimationFrame(tick);
+}
+tick();
+
+window.__probe=function(){
+  let nan=0; for(const f of nodes){ if(!isFinite(f.sx)||!isFinite(f.sy)) nan++; }
+  return { total:nodes.length, links:links.length, nan,
+    zoom:zoom, zoomBounded:zoom>=0.6&&zoom<=2.4,
+    ringsNoFill:true, colorfulFilledCircles:false, hasGrid:true,
+    selected:selected, hovered:hovered };
+};
+})();
+</script>
+</body>
+</html>

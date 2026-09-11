@@ -1,0 +1,376 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>芙洛理 · 概念14 轨道 · 动效概念原型</title>
+<style>
+  :root{
+    --bg0:#fbfaf6; --bg1:#f1efe8; --ink:#1c2b29; --mut:#5e716e;
+    --line:#d7ddd8; --accent:#0f9e86; --topbg:rgba(255,255,255,.94);
+  }
+  *{box-sizing:border-box;margin:0;padding:0;}
+  html,body{height:100%;background:var(--bg0);color:var(--ink);
+    font:13px/1.5 "Segoe UI",system-ui,"PingFang SC","Microsoft YaHei",sans-serif;
+    overflow:hidden;-webkit-font-smoothing:antialiased;transition:background .3s,color .3s;}
+  #c{position:fixed;inset:0;display:block;cursor:grab;}
+  #c.drag{cursor:grabbing;}
+
+  #top{position:fixed;top:0;left:0;right:0;height:46px;display:flex;align-items:center;
+    gap:6px;padding:0 16px;background:linear-gradient(180deg,var(--topbg),rgba(255,255,255,.72));
+    border-bottom:1px solid var(--line);backdrop-filter:blur(6px);z-index:8;transition:background .3s,border-color .3s;}
+  #top .brand{font-weight:600;letter-spacing:.4px;color:var(--accent);margin-right:14px;display:flex;align-items:center;gap:7px;}
+  #top .brand .gem{width:13px;height:13px;border:1.5px solid var(--accent);transform:rotate(45deg);border-radius:2px;}
+  #top .tab{padding:6px 12px;border-radius:7px;color:var(--mut);cursor:pointer;user-select:none;
+    border:1px solid transparent;transition:.18s;}
+  #top .tab:hover{color:var(--ink);background:rgba(15,158,134,.10);}
+  #top .tab.on{color:#fff;background:var(--accent);font-weight:600;}
+  #top .sp{flex:1;}
+  #top .avatar{width:26px;height:26px;border-radius:50%;
+    background:radial-gradient(circle at 35% 30%,#9ff0d8,#2f6f63);border:1px solid var(--line);}
+
+  #kpi{position:fixed;top:54px;left:0;right:0;display:flex;gap:26px;padding:8px 18px;
+    color:var(--mut);z-index:7;font-size:12px;pointer-events:none;transition:color .3s;}
+  #kpi b{color:var(--ink);font-weight:600;font-variant-numeric:tabular-nums;transition:color .3s;}
+
+  #chips{position:fixed;top:54px;right:14px;z-index:8;display:flex;flex-wrap:wrap;gap:6px;
+    justify-content:flex-end;max-width:46vw;}
+  #chips .lab{width:100%;text-align:right;color:var(--mut);font-size:11px;margin-bottom:1px;}
+  #chips .chip{display:flex;align-items:center;gap:5px;padding:3px 9px;border-radius:20px;
+    border:1px solid var(--line);background:#fff;color:var(--mut);cursor:pointer;user-select:none;font-size:11.5px;transition:.14s;}
+  #chips .chip .dot{width:9px;height:9px;border-radius:50%;}
+  #chips .chip:hover{color:var(--ink);}
+  #chips .chip.on{color:#fff;border-color:transparent;}
+  #chips .auto{padding:3px 11px;border-radius:20px;border:1px solid var(--line);background:#fff;color:var(--mut);cursor:pointer;user-select:none;font-size:11.5px;transition:.14s;}
+  #chips .auto.on{color:#fff;background:var(--accent);border-color:transparent;}
+
+  #panel{position:fixed;min-width:196px;padding:11px 13px;border-radius:11px;z-index:9;
+    background:rgba(255,255,255,.96);border:1px solid var(--line);
+    box-shadow:0 10px 34px rgba(40,60,55,.18);opacity:0;transform:translateY(6px);
+    transition:opacity .14s,transform .14s;pointer-events:none;}
+  #panel.show{opacity:1;transform:translateY(0);}
+  #panel .t{font-weight:600;color:var(--ink);margin-bottom:7px;font-size:13px;display:flex;align-items:center;gap:6px;}
+  #panel .t .sw{width:10px;height:10px;border-radius:3px;display:inline-block;border:1px solid rgba(127,127,127,.3);}
+  #panel .row{display:flex;justify-content:space-between;gap:18px;color:var(--mut);font-size:12px;margin:3px 0;}
+  #panel .row b{color:var(--ink);font-weight:600;font-variant-numeric:tabular-nums;}
+
+  #hint{position:fixed;left:16px;bottom:14px;color:var(--mut);font-size:12px;
+    line-height:1.7;z-index:6;pointer-events:none;max-width:380px;transition:color .3s;}
+  #hint kbd{background:rgba(15,158,134,.10);border:1px solid var(--line);border-radius:4px;
+    padding:1px 6px;color:var(--ink);font-size:11px;}
+
+  #legend{position:fixed;left:16px;top:96px;color:var(--mut);font-size:11px;z-index:6;pointer-events:none;line-height:1.7;}
+  #legend .ttl{font-weight:600;color:var(--ink);font-size:11.5px;margin-bottom:3px;}
+  #legend .bar{display:inline-block;width:130px;height:8px;border-radius:4px;vertical-align:middle;margin:2px 0;}
+  #legend .sc{color:var(--mut);}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="top">
+  <div class="brand"><span class="gem"></span>芙洛理 · 轨道</div>
+  <div class="tab">知识库</div>
+  <div class="tab">练考</div>
+  <div class="tab">复盘</div>
+  <div class="tab on">轨道</div>
+  <div class="sp"></div>
+  <div class="avatar"></div>
+</div>
+<div id="kpi">
+  <span>总考点 <b id="k_total">0</b></span>
+  <span>已掌握 <b id="k_lit">0</b></span>
+  <span>掌握率 <b id="k_rate">0%</b></span>
+  <span id="k_hover">悬停 —</span>
+</div>
+<div id="chips">
+  <div class="lab">学科高亮（点击筛选）</div>
+  <div class="chip on" data-s="-1"><span class="dot" style="background:#0f9e86"></span>全部</div>
+</div>
+<div id="panel">
+  <div class="t"><span class="sw" id="p_sw"></span><span id="p_title">—</span></div>
+  <div class="row"><span>学科</span><b id="p_subj">—</b></div>
+  <div class="row"><span>壳层 / 难度</span><b id="p_shell">—</b></div>
+  <div class="row"><span>分值权重</span><b id="p_score">—</b></div>
+  <div class="row"><span>难度系数</span><b id="p_diff">—</b></div>
+  <div class="row"><span>掌握度</span><b id="p_mast">—</b></div>
+  <div class="row"><span>关联考点</span><b id="p_adj">—</b></div>
+</div>
+<div id="legend">
+  <div class="ttl">能量壳层 · L1→L8</div>
+  <div class="sc">由内向外 = 难度递增（刻度已标注）</div>
+  <div class="sc">色相 = 学科 · 明暗 = 掌握度 · 点大小 = 分值</div>
+  <div class="bar" style="background:linear-gradient(90deg,hsl(180,42%,80%),hsl(180,60%,42%))"></div>
+  <div class="sc">左浅 = 未掌握 · 右深 = 已掌握</div>
+</div>
+<div id="hint">
+  <kbd>拖拽</kbd> 旋转轨道盘（拖哪转哪） · <kbd>滚轮</kbd> 缩放 · <kbd>悬停</kbd> 看考点详情<br>
+  <kbd>单击</kbd> 点亮/取消掌握（电子跃迁） · 静置 3 秒自动演示旋转 · 右上角可筛选学科
+</div>
+<script>
+"use strict";
+const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+let W=0,H=0,DPR=Math.max(1,Math.min(2,window.devicePixelRatio||1));
+function resize(){ W=window.innerWidth; H=window.innerHeight; cv.width=W*DPR; cv.height=H*DPR; cv.style.width=W+'px'; cv.style.height=H+'px'; ctx.setTransform(DPR,0,0,DPR,0,0); }
+resize(); window.addEventListener('resize',resize);
+
+// ---- 主题（仅亮色，软件主色） ----
+const THEME = {
+  bg0:'#fbfaf6', bg1:'#eef0ea', line:'rgba(127,140,135,.18)',
+  ring:'rgba(120,135,130,.30)', ringLbl:'#9aa8a3', nucleus:'#2f6f63',
+  hover:'#0f9e86', text:'#1c2b29', mut:'#5e716e', sparkS:48, sparkL:42,
+  facetL(m){ return 80 - 38*m; },           // 未掌握浅(80) / 已掌握深(42)
+  sat(d){ return 42 + d*18; },              // 难度越高越饱和
+  strokeL(m){ return Math.max(18, 80 - 38*m - 22); }
+};
+
+// ---- 学科（8 学科 = 8 扇区） ----
+const SUBJ = [
+  {name:'政治理论', h:158}, {name:'常识判断', h:188}, {name:'言语理解', h:208},
+  {name:'数量关系', h:230}, {name:'判断推理', h:262}, {name:'资料分析', h:286},
+  {name:'申论写作', h:14},  {name:'面试实战', h:38}
+];
+const NS = 8, PER = 46, TOTAL = NS*PER;
+const R0 = 72, STEP = 25, POLB = 0.52;   // 壳层半径/间距/极角带宽
+
+// ---- 确定性随机（mulberry32） ----
+function mulberry32(a){ return function(){ a|=0; a=(a+0x6D2B79F5)|0; let t=Math.imul(a^(a>>>15),1|a); t=(t+Math.imul(t^(t>>>7),61|t))^t; return ((t^(t>>>14))>>>0)/4294967296; }; }
+const rnd = mulberry32(20260816);
+
+// ---- 构建电子点（考点） ----
+const facets = [];
+for(let s=0;s<NS;s++){
+  for(let k=0;k<PER;k++){
+    const diff = 0.16 + 0.84*rnd();
+    const shell = Math.max(0, Math.min(NS-1, Math.round(diff*(NS-1))));
+    const score = 1 + Math.floor(rnd()*5);
+    const mast0 = rnd()<0.4 ? 1 : 0;
+    const az = s*(2*Math.PI/NS) + (rnd()-0.5)*(2*Math.PI/NS)*0.72;
+    const pol = (rnd()-0.5)*POLB;
+    const r = R0 + shell*STEP;
+    const bx = r*Math.cos(pol)*Math.cos(az);
+    const by = r*Math.sin(pol);
+    const bz = r*Math.cos(pol)*Math.sin(az);
+    facets.push({ id:facets.length, subj:s, shell, score, diff, mast:mast0, mastTarget:mast0,
+      bx,by,bz, pulse:0, sx:0,sy:0,sz:0,sc:0.9 });
+  }
+}
+// 邻接：同扇区按方位排序连成一条"电子轨道"（环）
+const adj = facets.map(()=>[]);
+const edges = [];
+for(let s=0;s<NS;s++){
+  const g = facets.filter(f=>f.subj===s).sort((a,b)=>Math.atan2(a.bz,a.bx)-Math.atan2(b.bz,b.bx));
+  for(let i=0;i<g.length;i++){
+    const a=g[i], b=g[(i+1)%g.length];
+    edges.push([a.id,b.id]); adj[a.id].push(b.id); adj[b.id].push(a.id);
+  }
+}
+const edgeSeed = edges.map((_,i)=>((i*2654435761)>>>0)%1000/1000);
+
+// ---- 四元数 trackball ----
+let q = [1,0,0,0];
+function qAxis(ax,ay,az,ang){ const h=ang/2,s=Math.sin(h); return [Math.cos(h),ax*s,ay*s,az*s]; }
+function qMul(a,b){ return [a[0]*b[0]-a[1]*b[1]-a[2]*b[2]-a[3]*b[3],
+  a[0]*b[1]+a[1]*b[0]+a[2]*b[3]-a[3]*b[2],
+  a[0]*b[2]-a[1]*b[3]+a[2]*b[0]+a[3]*b[1],
+  a[0]*b[3]+a[1]*b[2]-a[2]*b[1]+a[3]*b[0]]; }
+function qNorm(q){ const l=Math.hypot(q[0],q[1],q[2],q[3])||1; return [q[0]/l,q[1]/l,q[2]/l,q[3]/l]; }
+function rotV(v,q){ const w=q[0],x=q[1],y=q[2],z=q[3];
+  const cx=y*v[2]-z*v[1], cy=z*v[0]-x*v[2], cz=x*v[1]-y*v[0];
+  return [v[0]+2*(w*cx+(y*cz-z*cy)), v[1]+2*(w*cy+(z*cx-x*cz)), v[2]+2*(w*cz+(x*cy-y*cx))]; }
+function drag(dx,dy){ const ax=dy, ay=dx, az=0, len=Math.hypot(ax,ay)||1;
+  const ang=Math.sqrt(dx*dx+dy*dy)*0.006; if(ang>0) q=qNorm(qMul(qAxis(ax/len,ay/len,0,ang),q)); }
+// 惯性：与实际拖拽速度成正比（不再写死固定角速度），封顶+快速收敛 → 拖多快转多少、松手即停
+let spinAng=0, spinAxis=[0,1,0];
+
+const OFF=360, RANGE=720;
+function project(f){
+  const r = rotV([f.bx,f.by,f.bz], q);
+  const depth = (r[2]+OFF)/RANGE;
+  const sc = 0.78 + 0.22*Math.max(0.2, Math.min(1.4, depth));
+  return { px:W/2 + r[0]*zoom*sc, py:H/2 - r[1]*zoom*sc + 10, z2:r[2], sc, depth };
+}
+function pointR(f){ return (3.0 + f.score*1.15) * (f.sc||0.9) * zoom * 0.96; }
+
+// ---- 交互状态 ----
+let zoom=1, hovered=-1, selected=-1, dragSubj=-1;
+let dragging=false, moved=false, lastX=0, lastY=0, downX=0, downY=0;
+let lastInteract=performance.now(), autoOn=true;
+const sparks=[];
+
+function drawDiamond(x,y,r,rot){ ctx.beginPath();
+  ctx.moveTo(x+r*Math.cos(rot), y+r*Math.sin(rot));
+  ctx.lineTo(x+r*Math.cos(rot+Math.PI/2), y+r*Math.sin(rot+Math.PI/2));
+  ctx.lineTo(x-r*Math.cos(rot), y-r*Math.sin(rot));
+  ctx.lineTo(x-r*Math.cos(rot+Math.PI/2), y-r*Math.sin(rot+Math.PI/2));
+  ctx.closePath();
+}
+
+function frame(){
+  const now=performance.now();
+  if(autoOn && !dragging && (now-lastInteract>3000)){ q=qNorm(qMul(qAxis(0,1,0,0.0016),q)); }
+  if(!dragging && spinAng>1e-4){
+    q=qNorm(qMul(qAxis(spinAxis[0],spinAxis[1],spinAxis[2],spinAng),q)); spinAng*=0.82;
+  }
+
+  // 背景
+  const g=ctx.createRadialGradient(W/2,H*0.42,40,W/2,H*0.42,Math.max(W,H)*0.7);
+  g.addColorStop(0,'#fdfcf8'); g.addColorStop(0.7,'#eef0ea'); g.addColorStop(1,'#e6e9e3');
+  ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+
+  // 壳层环 + 刻度标签
+  ctx.lineWidth=1;
+  for(let s=0;s<NS;s++){
+    const r=R0+s*STEP; ctx.beginPath();
+    for(let i=0;i<=72;i++){ const az=i/72*2*Math.PI; const p=project({bx:r*Math.cos(az),by:0,bz:r*Math.sin(az)});
+      if(i===0) ctx.moveTo(p.px,p.py); else ctx.lineTo(p.px,p.py); }
+    ctx.strokeStyle=THEME.ring; ctx.stroke();
+    const lp=project({bx:r,by:0,bz:0});
+    ctx.fillStyle=THEME.ringLbl; ctx.font='10px system-ui'; ctx.textAlign='left';
+    ctx.fillText('L'+(s+1), lp.px+5, lp.py-4);
+  }
+  // 核
+  const np=project({bx:0,by:0,bz:0});
+  ctx.beginPath(); ctx.arc(np.px,np.py,7*zoom,0,Math.PI*2);
+  ctx.fillStyle='rgba(47,111,99,.16)'; ctx.fill();
+  ctx.lineWidth=1.5; ctx.strokeStyle=THEME.nucleus; ctx.stroke();
+  ctx.fillStyle=THEME.nucleus; ctx.font='10px system-ui'; ctx.textAlign='center';
+  ctx.fillText('核', np.px, np.py-12*zoom);
+
+  // 投影 + 排序
+  const order=facets.map(f=>{ const pr=project(f); f.sx=pr.px; f.sy=pr.py; f.sz=pr.z2; f.sc=pr.sc; return f; }).sort((a,b)=>a.sz-b.sz);
+  const dim = (dragSubj>=0);
+
+  // 边（能量轨道）
+  ctx.lineWidth=1;
+  for(let e=0;e<edges.length;e++){
+    const a=facets[edges[e][0]], b=facets[edges[e][1]];
+    const dimE = dim && (a.subj!==dragSubj || b.subj!==dragSubj);
+    const al=(0.10+0.10*(a.mast*0.5+b.mast*0.5))*(dimE?0.12:1);
+    ctx.strokeStyle='hsla('+SUBJ[a.subj].h+','+THEME.sat(a.diff)+'%,'+THEME.facetL(a.mast)+'%,'+al.toFixed(3)+')';
+    ctx.beginPath(); ctx.moveTo(a.sx,a.sy); ctx.lineTo(b.sx,b.sy); ctx.stroke();
+  }
+  // 能量流光点
+  const tt=now*0.00018;
+  for(let e=0;e<edges.length;e++){
+    const a=facets[edges[e][0]], b=facets[edges[e][1]];
+    if(dim && (a.subj!==dragSubj || b.subj!==dragSubj)) continue;
+    const p=(tt+edgeSeed[e])%1;
+    const x=a.sx+(b.sx-a.sx)*p, y=a.sy+(b.sy-a.sy)*p;
+    const al=(0.28+0.22*Math.sin(p*Math.PI))*(a.mast*0.6+0.4);
+    ctx.beginPath(); ctx.arc(x,y,1.7*zoom,0,Math.PI*2);
+    ctx.fillStyle='hsla('+SUBJ[a.subj].h+','+THEME.sat(a.diff)+'%,'+THEME.facetL(a.mast)+'%,'+al.toFixed(3)+')';
+    ctx.fill();
+  }
+
+  // 电子点（菱形）
+  for(const f of order){
+    const r=pointR(f);
+    const isH=(f.id===hovered)||(f.id===selected);
+    const isCard=(f.id===selected);
+    const dimP = dim && f.subj!==dragSubj;
+    const col='hsl('+SUBJ[f.subj].h+','+THEME.sat(f.diff)+'%,'+THEME.facetL(f.mast)+'%)';
+    const stk='hsl('+SUBJ[f.subj].h+','+THEME.sat(f.diff)+'%,'+THEME.strokeL(f.mast)+'%)';
+    ctx.save(); ctx.translate(f.sx,f.sy); ctx.globalAlpha = dimP?0.14:1;
+    drawDiamond(0,0,r,0);
+    ctx.fillStyle=col; ctx.fill();
+    ctx.lineWidth=isH?1.8:1; ctx.strokeStyle=isH?THEME.hover:stk; ctx.stroke();
+    if(f.pulse>0.02){ ctx.beginPath(); ctx.arc(0,0,r+4+f.pulse*8,0,Math.PI*2);
+      ctx.strokeStyle='hsla('+SUBJ[f.subj].h+','+THEME.sparkS+'%,'+THEME.sparkL+'%,'+(f.pulse*0.5).toFixed(3)+')';
+      ctx.lineWidth=1; ctx.stroke(); }
+    if(isH){ ctx.beginPath(); ctx.arc(0,0,r+5,0,Math.PI*2); ctx.strokeStyle=THEME.hover; ctx.lineWidth=1; ctx.stroke(); }
+    ctx.restore();
+  }
+
+  // 火花（掌握跃迁）
+  for(let i=sparks.length-1;i>=0;i--){ const sp=sparks[i];
+    sp.x+=sp.vx; sp.y+=sp.vy; sp.vy+=0.18; sp.life-=0.025;
+    if(sp.life<=0){ sparks.splice(i,1); continue; }
+    ctx.save(); ctx.globalAlpha=Math.max(0,sp.life); ctx.translate(sp.x,sp.y);
+    drawDiamond(0,0,2.4*sp.life+1,sp.rot); ctx.rotate(sp.rot);
+    ctx.fillStyle='hsl('+sp.h+',52%,42%)'; ctx.fill(); ctx.restore();
+  }
+
+  // 掌握度收敛动画
+  for(const f of facets){ if(Math.abs(f.mast-f.mastTarget)>0.001) f.mast+=(f.mastTarget-f.mast)*Math.min(1,0.12); if(f.pulse>0.001) f.pulse*=0.92; else f.pulse=0; }
+
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+
+// ---- 命中测试 ----
+function hit(mx,my){ let best=-1,bd=1e9;
+  for(const f of facets){ const r=pointR(f)+5; const d=Math.hypot(f.sx-mx,f.sy-my); if(d<r&&d<bd){bd=d;best=f.id;} }
+  return best; }
+
+// ---- 鼠标 / 触摸 ----
+function pos(e){ const t=e.touches?e.touches[0]:e; return [t.clientX,t.clientY]; }
+cv.addEventListener('mousedown',e=>{ const [x,y]=pos(e); dragging=true; moved=false; lastX=x; lastY=y; downX=x; downY=y; lastInteract=performance.now(); cv.classList.add('drag'); });
+cv.addEventListener('mousemove',e=>{ const [x,y]=pos(e);
+  if(dragging){ const dx=x-lastX, dy=y-lastY; if(Math.abs(x-downX)+Math.abs(y-downY)>4) moved=true; drag(dx,dy); const len=Math.hypot(dx,dy)||1; spinAxis=[dy/len,dx/len,0]; spinAng=Math.min(0.05, Math.sqrt(dx*dx+dy*dy)*0.006); lastX=x; lastY=y; lastInteract=performance.now(); }
+  else { const id=hit(x,y); hovered=id; updatePanel(x,y); }
+});
+window.addEventListener('mouseup',e=>{ const [x,y]=pos(e);
+  if(dragging && !moved){ const id=hit(x,y); if(id>=0){ const f=facets[id]; f.mastTarget=1-f.mastTarget;
+      const pr=project(f); for(let i=0;i<10;i++){ const a=Math.random()*Math.PI*2; sparks.push({x:pr.px,y:pr.py,vx:Math.cos(a)*(1.5+Math.random()*2.5),vy:Math.sin(a)*(1.5+Math.random()*2.5)-1,life:1,rot:Math.random()*Math.PI, h:SUBJ[f.subj].h}); }
+      for(const j of adj[id]) facets[j].pulse=1; selected=id; }
+    else { selected=-1; }
+    hidePanel();
+  }
+  dragging=false; cv.classList.remove('drag'); lastInteract=performance.now();
+});
+cv.addEventListener('wheel',e=>{ e.preventDefault(); zoom*=Math.exp(-e.deltaY*0.0012); zoom=Math.max(0.5,Math.min(2.2,zoom)); lastInteract=performance.now(); },{passive:false});
+// 触摸
+cv.addEventListener('touchstart',e=>{ const [x,y]=pos(e); dragging=true; moved=false; lastX=x; lastY=y; downX=x; downY=y; lastInteract=performance.now(); },{passive:true});
+cv.addEventListener('touchmove',e=>{ e.preventDefault(); const [x,y]=pos(e); const dx=x-lastX,dy=y-lastY; if(Math.abs(x-downX)+Math.abs(y-downY)>4) moved=true; drag(dx,dy); spin={x:dx,y:dy}; lastX=x; lastY=y; lastInteract=performance.now(); },{passive:false});
+cv.addEventListener('touchend',e=>{ if(dragging&&!moved){ const id=hit(lastX,lastY); if(id>=0){ const f=facets[id]; f.mastTarget=1-f.mastTarget; const pr=project(f); for(let i=0;i<10;i++){ const a=Math.random()*Math.PI*2; sparks.push({x:pr.px,y:pr.py,vx:Math.cos(a)*2,vy:Math.sin(a)*2-1,life:1,rot:Math.random()*Math.PI,h:SUBJ[f.subj].h}); } for(const j of adj[id]) facets[j].pulse=1; selected=id; } else selected=-1; hidePanel(); } dragging=false; lastInteract=performance.now(); });
+
+// ---- 面板 ----
+const panel=document.getElementById('panel');
+function updatePanel(x,y){ if(hovered<0){ hidePanel(); return; }
+  const f=facets[hovered];
+  document.getElementById('p_sw').style.background='hsl('+SUBJ[f.subj].h+','+THEME.sat(f.diff)+'%,'+THEME.facetL(f.mast)+'%)';
+  document.getElementById('p_title').textContent=SUBJ[f.subj].name+' · 电子 #'+(f.id%PER+1);
+  document.getElementById('p_subj').textContent=SUBJ[f.subj].name;
+  document.getElementById('p_shell').textContent='L'+(f.shell+1)+' / 难度 '+((f.shell+1)/NS*100).toFixed(0)+'%';
+  document.getElementById('p_score').textContent=f.score+' 分';
+  document.getElementById('p_diff').textContent=(f.diff*100).toFixed(0)+'%';
+  document.getElementById('p_mast').textContent=(f.mast*100).toFixed(0)+'% '+(f.mast>0.5?'· 已掌握':'· 未掌握');
+  document.getElementById('p_adj').textContent=adj[f.id].length+' 个';
+  const px = x>W-230 ? x-210 : x+16;
+  panel.style.left=px+'px'; panel.style.top=Math.min(y+12, H-200)+'px';
+  panel.classList.add('show');
+  document.getElementById('k_hover').textContent='悬停 '+SUBJ[f.subj].name+' · L'+(f.shell+1);
+}
+function hidePanel(){ panel.classList.remove('show'); document.getElementById('k_hover').textContent='悬停 —'; }
+
+// ---- 学科筛选 chips ----
+const chips=document.getElementById('chips');
+SUBJ.forEach((s,i)=>{ const el=document.createElement('div'); el.className='chip'; el.dataset.s=i;
+  el.innerHTML='<span class="dot" style="background:hsl('+s.h+',48%,48%)"></span>'+s.name;
+  el.onclick=()=>{ dragSubj = (dragSubj===i)?-1:i; [...chips.querySelectorAll('.chip')].forEach(c=>c.classList.toggle('on', +c.dataset.s===dragSubj)); lastInteract=performance.now(); };
+  chips.appendChild(el);
+});
+const autoBtn=document.createElement('div'); autoBtn.className='auto on'; autoBtn.textContent='自动演示';
+autoBtn.onclick=()=>{ autoOn=!autoOn; autoBtn.classList.toggle('on',autoOn); lastInteract=performance.now(); };
+chips.appendChild(autoBtn);
+
+// 初始全部 chip
+chips.querySelector('.chip[data-s="-1"]').onclick=()=>{ dragSubj=-1; [...chips.querySelectorAll('.chip')].forEach(c=>c.classList.toggle('on', c.dataset.s==='-1')); lastInteract=performance.now(); };
+
+// ---- KPI ----
+function updateKPI(){ let lit=0; for(const f of facets) if(f.mast>0.5) lit++;
+  document.getElementById('k_total').textContent=TOTAL;
+  document.getElementById('k_lit').textContent=lit;
+  document.getElementById('k_rate').textContent=(lit/TOTAL*100).toFixed(0)+'%';
+}
+setInterval(updateKPI,400); updateKPI();
+
+// ---- 校验钩 ----
+window.__probe=function(){ let lit=0,nan=0,minR=1e9,maxR=0;
+  for(const f of facets){ if(f.mast>0.5) lit++; const r=pointR(f); if(!isFinite(r)||!isFinite(f.sx)||!isFinite(f.sy)) nan++; minR=Math.min(minR,r); maxR=Math.max(maxR,r); }
+  return { total:TOTAL, lit, nan, edges:edges.length, minR:+minR.toFixed(2), maxR:+maxR.toFixed(2),
+    pointsVisible:minR>0.5, zoom, zoomBounded:zoom>=0.5&&zoom<=2.2, autoOn };
+};
+</script>
+</body>
+</html>

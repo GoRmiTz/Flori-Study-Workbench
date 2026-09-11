@@ -1,0 +1,697 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>芙洛理 · 晶簇 CrystalCluster · 动效概念原型</title>
+<style>
+  :root{
+    --bg0:#fbfaf6; --bg1:#f1efe8; --bg2:#e6e3da;
+    --ink:#1b2a28; --mut:#647b77; --line:#dde2dd; --accent:#0f9e86; --accent-deep:#0c7e6b;
+    --accent-soft:rgba(15,158,134,.10); --accent-ring:rgba(15,158,134,.20);
+    --topbg:rgba(255,255,255,.90); --topbg2:rgba(255,255,255,.66);
+    --codexbg:rgba(255,255,255,.82); --detailbg:rgba(255,255,255,.96);
+    --shadow-sm:0 1px 2px rgba(30,50,45,.05); --shadow-md:0 10px 30px rgba(30,50,45,.12);
+    --shadow-lg:0 18px 50px rgba(30,50,45,.16); --radius:13px;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;}
+  html,body{height:100%;background:var(--bg0);color:var(--ink);
+    font:13px/1.55 "Segoe UI",system-ui,"PingFang SC","Microsoft YaHei",sans-serif;
+    overflow:hidden;-webkit-font-smoothing:antialiased;transition:background .3s,color .3s;}
+  #c{position:fixed;inset:0;display:block;cursor:grab;}
+  #c.drag{cursor:grabbing;}
+
+  #top{position:fixed;top:0;left:0;right:0;height:48px;display:flex;align-items:center;
+    gap:8px;padding:0 18px;background:linear-gradient(180deg,var(--topbg),var(--topbg2));
+    border-bottom:1px solid var(--line);backdrop-filter:blur(10px);z-index:8;transition:.3s;}
+  #top .brand{font-weight:700;letter-spacing:1.5px;color:var(--accent-deep);margin-right:16px;
+    display:flex;align-items:center;gap:8px;transition:.3s;}
+  #top .brand::before{content:"";width:11px;height:11px;background:var(--accent);transform:rotate(45deg);
+    border-radius:2px;box-shadow:0 0 0 3px var(--accent-soft);}
+  #top .tab{padding:6px 13px;border-radius:8px;color:var(--mut);cursor:pointer;user-select:none;
+    border:1px solid transparent;transition:.18s;font-size:12.5px;}
+  #top .tab:hover{color:var(--ink);background:var(--accent-soft);}
+  #top .tab.on{color:#fff;background:var(--accent);font-weight:600;box-shadow:var(--shadow-sm);}
+  #top .sp{flex:1;}
+  #top .avatar{width:28px;height:28px;border-radius:50%;
+    background:radial-gradient(circle at 35% 30%,#a7f1da,#2f6f63);border:1px solid var(--line);box-shadow:var(--shadow-sm);}
+
+  #kpi{position:fixed;top:56px;left:0;right:0;display:flex;gap:28px;padding:9px 20px;
+    color:var(--mut);z-index:7;font-size:12px;pointer-events:none;letter-spacing:.3px;transition:.3s;}
+  #kpi b{color:var(--ink);font-weight:600;font-variant-numeric:tabular-nums;}
+
+  /* 标本图鉴（左栏卡牌） */
+  #codex{position:fixed;top:48px;left:0;bottom:0;width:304px;z-index:7;
+    background:var(--codexbg);border-right:1px solid var(--line);backdrop-filter:blur(10px);
+    display:flex;flex-direction:column;transition:transform .32s cubic-bezier(.4,0,.2,1);box-shadow:1px 0 24px rgba(30,50,45,.08);}
+  #codex.collapsed{transform:translateX(-102%);}
+  #codexHd{padding:13px 15px 11px;border-bottom:1px solid var(--line);}
+  #codexHd .row1{display:flex;align-items:center;justify-content:space-between;}
+  #codexHd .ttl{font-weight:700;color:var(--ink);font-size:13.5px;letter-spacing:.5px;}
+  #codexHd .cnt{color:var(--mut);font-size:11px;font-variant-numeric:tabular-nums;
+    background:var(--accent-soft);color:var(--accent-deep);padding:2px 9px;border-radius:20px;font-weight:600;}
+  #codexHd .tog{color:var(--mut);cursor:pointer;user-select:none;font-size:12px;padding:3px 9px;
+    border:1px solid var(--line);border-radius:8px;transition:.16s;}
+  #codexHd .tog:hover{color:var(--accent-deep);background:var(--accent-soft);border-color:var(--accent);}
+  #codexFlt{display:flex;gap:7px;margin-top:11px;}
+  #codexFlt select{flex:1;font:12px inherit;color:var(--ink);background:#fff;border:1px solid var(--line);
+    border-radius:8px;padding:5px 8px;outline:none;cursor:pointer;transition:.16s;appearance:none;
+    background-image:linear-gradient(45deg,transparent 50%,var(--mut) 50%),linear-gradient(135deg,var(--mut) 50%,transparent 50%);
+    background-position:calc(100% - 14px) 52%,calc(100% - 9px) 52%;background-size:5px 5px,5px 5px;background-repeat:no-repeat;}
+  #codexFlt select:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft);}
+  #codexList{flex:1;overflow-y:auto;padding:10px;display:flex;flex-direction:column;gap:8px;}
+  #codexList::-webkit-scrollbar{width:8px;} #codexList::-webkit-scrollbar-thumb{background:var(--line);border-radius:4px;}
+
+  .card{position:relative;background:#fff;border:1px solid var(--line);border-radius:var(--radius);
+    padding:10px 12px 11px 17px;cursor:pointer;box-shadow:var(--shadow-sm);
+    transition:transform .16s cubic-bezier(.4,0,.2,1),border-color .16s,box-shadow .16s,background .16s;}
+  .card:hover{transform:translateX(3px);border-color:var(--accent);box-shadow:0 5px 16px rgba(15,158,134,.13);}
+  .card.hot{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-ring);}
+  .card.sel{border-color:var(--accent);background:linear-gradient(180deg,#ffffff,#f1fbf8);
+    box-shadow:0 7px 22px rgba(15,158,134,.18);}
+  .card .cbar{position:absolute;left:0;top:10px;bottom:10px;width:4px;border-radius:4px;background:var(--line);}
+  .card .chead{display:flex;align-items:center;gap:8px;margin-bottom:6px;}
+  .card .gem{width:9px;height:9px;transform:rotate(45deg);border-radius:2px;flex:none;box-shadow:var(--shadow-sm);}
+  .card .ctitle{font-weight:600;font-size:13px;color:var(--ink);letter-spacing:.2px;}
+  .card .cmeta{display:flex;align-items:center;gap:9px;color:var(--mut);font-size:11px;}
+  .card .cdot{width:7px;height:7px;border-radius:50%;display:inline-block;flex:none;}
+  .card .cbar2{height:6px;border-radius:4px;background:#eef1ef;margin-top:7px;overflow:hidden;}
+  .card .cbar2 i{display:block;height:100%;border-radius:4px;transition:width .4s cubic-bezier(.4,0,.2,1);}
+  .card .cstate{position:absolute;right:11px;top:10px;font-size:10.5px;color:var(--mut);
+    padding:1px 8px;border-radius:20px;background:#f1f4f2;letter-spacing:.3px;}
+  .card.lit .cstate{color:var(--accent-deep);background:var(--accent-soft);font-weight:600;}
+
+  /* 详情标本卡 */
+  #detail{position:fixed;right:16px;top:56px;width:314px;z-index:8;background:var(--detailbg);
+    border:1px solid var(--line);border-radius:18px;padding:0;overflow:hidden;
+    box-shadow:var(--shadow-lg);opacity:0;transform:translateY(10px) scale(.985);
+    transition:opacity .2s,transform .2s cubic-bezier(.4,0,.2,1);pointer-events:none;}
+  #detail.show{opacity:1;transform:translateY(0) scale(1);pointer-events:auto;}
+  #detail .dhead{display:flex;align-items:center;justify-content:space-between;padding:15px 17px 12px;}
+  #detail .dhead .dt{font-weight:700;font-size:15px;color:var(--ink);letter-spacing:.3px;}
+  #detail .dclose{cursor:pointer;color:var(--mut);font-size:19px;line-height:1;padding:0 5px;
+    border-radius:6px;transition:.14s;}
+  #detail .dclose:hover{color:var(--accent-deep);background:var(--accent-soft);}
+  #detail .dbar{height:4px;background:linear-gradient(90deg,var(--accent),#3fbfa6);}
+  #detail .dgrid{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--line);margin-top:1px;}
+  #detail .dcell{background:#fff;padding:11px 16px;}
+  #detail .dcell span{display:block;color:var(--mut);font-size:11px;margin-bottom:3px;letter-spacing:.4px;}
+  #detail .dcell b{color:var(--ink);font-weight:600;font-size:14px;font-variant-numeric:tabular-nums;}
+  #detail .dmast{padding:13px 16px 6px;}
+  #detail .dmast button{width:100%;padding:10px;border-radius:11px;border:1px solid var(--accent);
+    background:var(--accent);color:#fff;font:600 13px inherit;cursor:pointer;transition:.16s;letter-spacing:.5px;}
+  #detail .dmast button:hover{background:var(--accent-deep);box-shadow:0 4px 14px rgba(15,158,134,.25);}
+  #detail .dmast button.off{background:#fff;color:var(--accent-deep);}
+  #detail .dmast button.off:hover{background:var(--accent-soft);}
+  #detail .dadjs{padding:9px 16px 16px;}
+  #detail .dadjs_t{display:block;color:var(--mut);font-size:11px;margin-bottom:8px;letter-spacing:.4px;}
+  #detail .dadjs_l{display:flex;flex-wrap:wrap;gap:6px;}
+  #detail .adjchip{font-size:11.5px;color:var(--ink);background:#fff;border:1px solid var(--line);
+    border-radius:20px;padding:4px 11px;cursor:pointer;transition:.14s;}
+  #detail .adjchip:hover{border-color:var(--accent);background:var(--accent-soft);color:var(--accent-deep);}
+
+  #panel{position:fixed;min-width:190px;padding:12px 14px;border-radius:13px;z-index:9;
+    background:var(--detailbg);border:1px solid var(--line);
+    box-shadow:var(--shadow-md);opacity:0;transform:translateY(6px);
+    transition:opacity .15s,transform .15s;pointer-events:none;}
+  #panel.show{opacity:1;transform:translateY(0);}
+  #panel .t{font-weight:700;color:var(--ink);margin-bottom:7px;font-size:13px;letter-spacing:.3px;}
+  #panel .row{display:flex;justify-content:space-between;gap:20px;color:var(--mut);font-size:12px;padding:2px 0;}
+  #panel .row b{color:var(--ink);font-weight:600;font-variant-numeric:tabular-nums;}
+  #panel .sw{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:6px;vertical-align:middle;border:1px solid rgba(127,127,127,.25);}
+
+  #hint{position:fixed;left:316px;bottom:15px;color:var(--mut);font-size:12px;
+    line-height:1.8;z-index:6;pointer-events:none;max-width:380px;transition:.3s;}
+  #hint kbd{background:var(--accent-soft);border:1px solid var(--line);border-radius:5px;
+    padding:1px 7px;color:var(--accent-deep);font-size:11px;font-weight:500;}
+
+  #legend{position:fixed;right:16px;bottom:15px;color:var(--mut);font-size:11px;
+    line-height:1.8;z-index:6;pointer-events:none;text-align:right;transition:.3s;}
+  #legend .bar{display:inline-block;width:120px;height:8px;border-radius:5px;
+    background:linear-gradient(90deg,hsl(190,40%,78%),hsl(190,46%,42%));vertical-align:middle;margin-left:6px;}
+  #legend .chips{margin-top:4px;}
+  #legend .chip{display:inline-block;width:9px;height:9px;border-radius:50%;margin-left:4px;border:1px solid rgba(127,127,127,.25);}
+</style>
+</head>
+<body>
+  <canvas id="c"></canvas>
+
+  <div id="top">
+    <span class="brand">芙洛理</span>
+    <span class="tab">知识库</span>
+    <span class="tab">练考</span>
+    <span class="tab">复盘</span>
+    <span class="tab on">晶簇</span>
+    <span class="sp"></span>
+    <span class="avatar"></span>
+  </div>
+
+  <div id="kpi">
+    <span>晶面总数 <b id="k_total">0</b></span>
+    <span>已点亮 <b id="k_lit">0</b></span>
+    <span>掌握率 <b id="k_rate">0%</b></span>
+    <span>平均掌握 <b id="k_avg">0%</b></span>
+    <span>最弱晶系 <b id="k_weak">—</b></span>
+  </div>
+
+  <div id="codex">
+    <div id="codexHd">
+      <div class="row1">
+        <span class="ttl">标本图鉴</span>
+        <span class="cnt" id="codexCnt">0 / 0</span>
+        <span class="tog" id="codexTog">收起</span>
+      </div>
+      <div class="codexFlt">
+        <select id="fSubj"><option value="-1">全部学科</option></select>
+        <select id="fSort">
+          <option value="weak">未掌握优先</option>
+          <option value="mast">掌握度升序</option>
+          <option value="subj">按学科</option>
+        </select>
+      </div>
+    </div>
+    <div id="codexList"></div>
+  </div>
+
+  <div id="detail">
+    <div class="dhead"><span class="dt" id="d_title">—</span><span class="dclose" id="d_close">×</span></div>
+    <div class="dbar" id="d_bar"></div>
+    <div class="dgrid">
+      <div class="dcell"><span>学科</span><b id="d_subj">—</b></div>
+      <div class="dcell"><span>晶系</span><b id="d_sys">—</b></div>
+      <div class="dcell"><span>分值权重</span><b id="d_score">—</b></div>
+      <div class="dcell"><span>难度</span><b id="d_diff">—</b></div>
+      <div class="dcell"><span>掌握度</span><b id="d_mast">—</b></div>
+      <div class="dcell"><span>状态</span><b id="d_state">—</b></div>
+    </div>
+    <div class="dmast"><button id="d_btn">标记为已掌握</button></div>
+    <div class="dadjs"><span class="dadjs_t">相邻晶面（点击溯源）</span><div class="dadjs_l" id="d_adj"></div></div>
+  </div>
+
+  <div id="panel">
+    <div class="t" id="p_title">—</div>
+    <div class="row"><span><span class="sw" id="p_sw"></span>学科</span><b id="p_subj">—</b></div>
+    <div class="row"><span>分值权重</span><b id="p_score">—</b></div>
+    <div class="row"><span>难度</span><b id="p_diff">—</b></div>
+    <div class="row"><span>掌握度</span><b id="p_mast">—</b></div>
+    <div class="row"><span>相邻晶面</span><b id="p_adj">—</b></div>
+    <div class="row"><span>状态</span><b id="p_state">—</b></div>
+  </div>
+
+  <div id="hint">
+    <kbd>左键</kbd> 点亮/取消掌握(迸发晶花) + 选中标本卡 · <kbd>右键</kbd> 取消掌握<br>
+    <kbd>拖拽</kbd> 旋转标本(拖哪跟哪) · <kbd>滚轮</kbd> 缩放 · 静置自动演示<br>
+    左侧<kbd>标本图鉴</kbd>点卡片→晶体转正面对你；悬停晶体→卡片高亮
+  </div>
+
+  <div id="legend">
+    色相 = 学科 · 纯度 = 难度 · 明暗 = 掌握度<br>
+    <span class="bar"></span><br>
+    <span class="chips" id="legend_chips"></span>
+  </div>
+
+<script>
+"use strict";
+(function(){
+  const cv = document.getElementById('c');
+  const ctx = cv.getContext('2d');
+
+  // ---------- 确定性随机（mulberry32） ----------
+  function mulberry32(a){
+    return function(){
+      a |= 0; a = (a + 0x6D2B79F5) | 0;
+      let t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+  const rnd = mulberry32(20260816);
+
+  // ---------- 学科定义（含晶系风味名） ----------
+  const SUBJ = [
+    {name:'行测',   h:190, sys:'等轴晶系'}, {name:'申论',   h:212, sys:'层状晶系'},
+    {name:'常识',   h:168, sys:'粒状晶系'}, {name:'时政',   h:232, sys:'针状晶系'},
+    {name:'专业课', h:262, sys:'棱柱晶系'}, {name:'英语',   h:146, sys:'板状晶系'},
+    {name:'政治',   h:284, sys:'柱状晶系'}, {name:'数学',   h:36,  sys:'菱方晶系'}
+  ];
+  const PER = 46, TOTAL = SUBJ.length * PER;
+
+  const SEEDS = [];
+  const RSEED = 240;
+  for(let i=0;i<SUBJ.length;i++){
+    const phi = Math.acos(1 - 2*(i+0.5)/SUBJ.length);
+    const theta = Math.PI*(1+Math.sqrt(5))*i;
+    SEEDS.push({ x:RSEED*Math.sin(phi)*Math.cos(theta), y:RSEED*Math.cos(phi)*0.7, z:RSEED*Math.sin(phi)*Math.sin(theta) });
+  }
+
+  const facets = [];
+  for(let s=0;s<SUBJ.length;s++){
+    const seed = SEEDS[s];
+    for(let k=0;k<PER;k++){
+      const phi = Math.acos(1 - 2*(k+0.5)/PER);
+      const theta = Math.PI*(1+Math.sqrt(5))*k + s*1.3;
+      const rr = 78*(0.62+0.38*rnd());
+      const jx=(rnd()-0.5)*16, jy=(rnd()-0.5)*16, jz=(rnd()-0.5)*16;
+      const bx = seed.x + rr*Math.sin(phi)*Math.cos(theta) + jx;
+      const by = seed.y + rr*Math.cos(phi) + jy;
+      const bz = seed.z + rr*Math.sin(phi)*Math.sin(theta) + jz;
+      const score = 1 + Math.floor(rnd()*5);
+      const diff = 0.2 + rnd()*0.8;
+      const mast0 = rnd() < 0.4 ? 1 : 0;
+      facets.push({ id:facets.length, subj:s, bx,by,bz, score, diff, mast:mast0, mastTarget:mast0, pulse:0,
+                    sx:0, sy:0, sz:0, depth:0 });
+    }
+  }
+
+  // 邻接（每晶系内最近 2 邻居）
+  const adj = facets.map(()=>[]);
+  for(let s=0;s<SUBJ.length;s++){
+    const g = facets.filter(f=>f.subj===s);
+    for(const a of g){
+      const d = g.map(b=>({b,dd:(a.bx-b.bx)**2+(a.by-b.by)**2+(a.bz-b.bz)**2}))
+                 .filter(o=>o.b!==a).sort((p,q)=>p.dd-q.dd);
+      for(let n=0;n<Math.min(2,d.length);n++){
+        if(!adj[a.id].includes(d[n].b.id)){ adj[a.id].push(d[n].b.id); adj[d[n].b.id].push(a.id); }
+      }
+    }
+  }
+  const edges = [];
+  const seen = new Set();
+  for(let i=0;i<facets.length;i++){
+    for(const j of adj[i]){
+      const key = i<j?i+'_'+j:j+'_'+i;
+      if(!seen.has(key)){ seen.add(key); edges.push([i,j]); }
+    }
+  }
+
+  // ---------- 主题（仅亮色） ----------
+  const THEME = {
+    bg:['#fbfaf6','#f1efe8','#e4e2da'],
+    fLight:(m)=>78 - 36*m,        // 未掌握 78%(淡) → 已掌握 42%(深艳)，均明显深于背景
+    fSat:(d)=>30 + 50*d,          // 难→更饱和
+    edge:(h,a)=>'hsla('+h+',42%,32%,'+a+')',
+    strokeDelta:-22, hover:'rgba(15,40,38,.55)', sparkL:42, sparkS:62, flowL:38, flowS:62, chipL:42
+  };
+
+  function facetColors(f){
+    const h=SUBJ[f.subj].h, s=THEME.fSat(f.diff), l=THEME.fLight(f.mast);
+    const cl=(x)=>Math.max(8,Math.min(96,x));
+    return {
+      base:'hsl('+h+','+s.toFixed(0)+'%,'+l.toFixed(0)+'%)',
+      tl:'hsl('+h+','+s.toFixed(0)+'%,'+cl(l+14).toFixed(0)+'%)',
+      tr:'hsl('+h+','+s.toFixed(0)+'%,'+cl(l+7).toFixed(0)+'%)',
+      bot:'hsl('+h+','+s.toFixed(0)+'%,'+cl(l-12).toFixed(0)+'%)',
+      stroke:'hsl('+h+','+(s+8).toFixed(0)+'%,'+cl(l+THEME.strokeDelta).toFixed(0)+'%)'
+    };
+  }
+  function facetFill(f){ const h=SUBJ[f.subj].h; return 'hsl('+h+','+THEME.fSat(f.diff).toFixed(0)+'%,'+THEME.fLight(f.mast).toFixed(0)+'%)'; }
+
+  // ---------- 四元数 trackball 旋转 ----------
+  function qAxis(ax,ay,az,ang){ const h=ang/2,s=Math.sin(h); return [Math.cos(h),ax*s,ay*s,az*s]; }
+  function qMul(a,b){
+    return [ a[0]*b[0]-a[1]*b[1]-a[2]*b[2]-a[3]*b[3],
+             a[0]*b[1]+a[1]*b[0]+a[2]*b[3]-a[3]*b[2],
+             a[0]*b[2]-a[1]*b[3]+a[2]*b[0]+a[3]*b[1],
+             a[0]*b[3]+a[1]*b[2]-a[2]*b[1]+a[3]*b[0] ];
+  }
+  function qNorm(q){ const l=Math.hypot(q[0],q[1],q[2],q[3])||1; return [q[0]/l,q[1]/l,q[2]/l,q[3]/l]; }
+  function rotV(v,q){
+    const w=q[0],x=q[1],y=q[2],z=q[3];
+    const cx=y*v[2]-z*v[1], cy=z*v[0]-x*v[2], cz=x*v[1]-y*v[0];
+    return [ v[0]+2*(w*cx+(y*cz-z*cy)), v[1]+2*(w*cy+(z*cx-x*cz)), v[2]+2*(w*cz+(x*cy-y*cx)) ];
+  }
+  function qFromTo(u,v){ // 旋转单位向量 u → v
+    let dot=u[0]*v[0]+u[1]*v[1]+u[2]*v[2];
+    if(dot>0.99999) return [1,0,0,0];
+    if(dot<-0.99999) return [0,1,0,0];
+    const cx=u[1]*v[2]-u[2]*v[1], cy=u[2]*v[0]-u[0]*v[2], cz=u[0]*v[1]-u[1]*v[0];
+    return qNorm([1+dot, cx, cy, cz]);
+  }
+  function slerp(a,b,t){
+    let d=a[0]*b[0]+a[1]*b[1]+a[2]*b[2]+a[3]*b[3], bb=b;
+    if(d<0){ bb=[-b[0],-b[1],-b[2],-b[3]]; d=-d; }
+    if(d>0.9995){ return qNorm([a[0]+(bb[0]-a[0])*t, a[1]+(bb[1]-a[1])*t, a[2]+(bb[2]-a[2])*t, a[3]+(bb[3]-a[3])*t]); }
+    const th=Math.acos(d), si=Math.sin(th), c1=Math.sin((1-t)*th)/si, c2=Math.sin(t*th)/si;
+    return qNorm([a[0]*c1+bb[0]*c2, a[1]*c1+bb[1]*c2, a[2]*c1+bb[2]*c2, a[3]*c1+bb[3]*c2]);
+  }
+  let q = qNorm(qMul(qAxis(0,1,0,0.4), qAxis(1,0,0,-0.2)));
+  let spinAxis=[0,1,0], spinAng=0;
+  let qTarget=[1,0,0,0], turning=false;
+
+  // ---------- 视图状态 ----------
+  let zoom=1.0, dragging=false, lastX=0, lastY=0, moved=false;
+  let userActive=false, hovered=-1, cardHoverId=-1, selectedId=-1;
+  let W=0,H=0,DPR=Math.min(window.devicePixelRatio||1,2);
+  let codexOpen=true;
+
+  function resize(){
+    W=window.innerWidth; H=window.innerHeight;
+    cv.width=Math.max(2,Math.floor(W*DPR)); cv.height=Math.max(2,Math.floor(H*DPR));
+    cv.style.width=W+'px'; cv.style.height=H+'px';
+    ctx.setTransform(DPR,0,0,DPR,0,0);
+  }
+  window.addEventListener('resize',resize); resize();
+
+  function cxOff(){ return codexOpen ? 130 : 0; }
+  function project(f){
+    const r = rotV([f.bx,f.by,f.bz], q);
+    const depth = (r[2]+360)/720;
+    const sc = 0.78 + 0.22*Math.max(0.2, Math.min(1.4, depth));
+    return { px:W/2 + cxOff() + r[0]*zoom*sc, py:H/2 - r[1]*zoom*sc + 10, z2:r[2], sc:sc, depth:depth };
+  }
+  function facetR(f){ return (5.0 + f.score*1.6) * (f.sc||0.9) * zoom * 0.96; }
+  function drawDiamond(cx,cy,rad,h,mast){
+    ctx.beginPath(); ctx.moveTo(cx,cy-rad); ctx.lineTo(cx+rad,cy); ctx.lineTo(cx,cy+rad); ctx.lineTo(cx-rad,cy); ctx.closePath();
+    ctx.fillStyle='hsl('+h+','+(28+mast*40).toFixed(0)+'%,'+(62-mast*28).toFixed(0)+'%)'; ctx.fill();
+  }
+
+  // ---------- 交互 ----------
+  function pointerPos(e){ const r=cv.getBoundingClientRect(); return {x:e.clientX-r.left, y:e.clientY-r.top}; }
+  function pickAt(mx,my){
+    let best=-1,bestD=16*16;
+    for(const f of facets){ const dx=f.sx-mx,dy=f.sy-my,d=dx*dx+dy*dy; if(d<bestD){bestD=d;best=f.id;} }
+    return best;
+  }
+
+  cv.addEventListener('mousedown', e=>{
+    userActive=true;
+    if(e.button===0||e.button===2){ dragging=true; moved=false; lastX=e.clientX; lastY=e.clientY; cv.classList.add('drag'); }
+  });
+  window.addEventListener('mouseup', e=>{
+    if(dragging){ dragging=false; cv.classList.remove('drag');
+      if(!moved && e.button===0 && hovered>=0){ const f=facets[hovered]; applyMastery(hovered, f.mastTarget>0.5?0:1, true); selectFacet(hovered,false); }
+      if(!moved && e.button===2 && hovered>=0){ applyMastery(hovered,0,false); selectFacet(hovered,false); }
+    }
+  });
+  let prevHover=-1;
+  cv.addEventListener('mousemove', e=>{
+    const p=pointerPos(e);
+    if(dragging){
+      const dx=e.clientX-lastX, dy=e.clientY-lastY;
+      if(Math.abs(dx)+Math.abs(dy)>2) moved=true;
+      const ax=dy, ay=dx, az=0, len=Math.hypot(ax,ay)||1;
+      const ang=Math.sqrt(dx*dx+dy*dy)*0.006;
+      if(ang>0){ const dq=qAxis(ax/len, ay/len, 0, ang); q=qNorm(qMul(dq,q)); spinAxis=[ax/len, ay/len, 0]; spinAng=ang; }
+      lastX=e.clientX; lastY=e.clientY; userActive=true;
+    }
+    hovered=pickAt(p.x,p.y);
+    if(hovered!==prevHover){
+      if(prevHover>=0 && cardEls[prevHover]) cardEls[prevHover].classList.remove('hot');
+      if(hovered>=0 && cardEls[hovered]) cardEls[hovered].classList.add('hot');
+      prevHover=hovered;
+    }
+    if(hovered>=0) cv.style.cursor='pointer'; else if(!dragging) cv.style.cursor='grab';
+  });
+  cv.addEventListener('mouseleave', ()=>{ hovered=-1; if(prevHover>=0&&cardEls[prevHover]){cardEls[prevHover].classList.remove('hot');prevHover=-1;} });
+  cv.addEventListener('contextmenu', e=>e.preventDefault());
+  cv.addEventListener('wheel', e=>{
+    e.preventDefault(); userActive=true;
+    zoom *= (e.deltaY<0?1.08:0.926);
+    zoom=Math.max(0.5, Math.min(2.2, zoom));
+  }, {passive:false});
+
+  function applyMastery(id, val, spark){
+    if(id<0) return;
+    const f=facets[id]; f.mastTarget=val;
+    if(val>0.5 && spark) spawnSparks(f.sx, f.sy, f.subj, 14, 1.4);
+    for(const j of adj[id]) facets[j].pulse=Math.min(1, facets[j].pulse+0.9);
+    updateCodexCard(id);
+    if(selectedId===id) updateDetail(id);
+    updateKPI();
+  }
+
+  // ---------- 粒子：掌握晶花 / 棱线能量流 / 悬停微光 ----------
+  const sparks=[], flows=[];
+  function spawnSparks(x,y,subj,count,power){
+    for(let i=0;i<count;i++){
+      const a=Math.random()*Math.PI*2, sp=(0.5+Math.random()*1.5)*power;
+      sparks.push({x,y,vx:Math.cos(a)*sp,vy:Math.sin(a)*sp-0.3*power,life:1,subj,r:1.4+Math.random()*2.4});
+    }
+    if(sparks.length>260) sparks.splice(0, sparks.length-260);
+  }
+  function spawnFlow(){
+    const e=edges[Math.floor(Math.random()*edges.length)];
+    flows.push({a:e[0],b:e[1],t:0,sp:0.55+Math.random()*0.5});
+    if(flows.length>40) flows.splice(0, flows.length-40);
+  }
+  let flowTimer=0;
+
+  // ---------- 面板（悬停提示） ----------
+  const panel=document.getElementById('panel');
+  function updatePanel(f){
+    if(!f){ panel.classList.remove('show'); return; }
+    document.getElementById('p_title').textContent = SUBJ[f.subj].name+' · 晶面 #'+(f.id%PER+1);
+    document.getElementById('p_sw').style.background = facetFill(f);
+    document.getElementById('p_subj').textContent = SUBJ[f.subj].name;
+    document.getElementById('p_score').textContent = f.score;
+    document.getElementById('p_diff').textContent = (f.diff*100).toFixed(0)+'%';
+    document.getElementById('p_mast').textContent = (f.mast*100).toFixed(0)+'%';
+    document.getElementById('p_adj').textContent = adj[f.id].length;
+    document.getElementById('p_state').textContent = stateText(f);
+    let px=(f.sx||W/2)+16, py=(f.sy||H/2)+16;
+    px=Math.min(px, W-210); py=Math.min(py, H-160);
+    panel.style.left=px+'px'; panel.style.top=py+'px';
+    panel.classList.add('show');
+  }
+  function stateText(f){
+    return f.mastTarget>0.5 ? (f.mast>0.85?'已掌握':'掌握中') : (f.mast<0.15?'未掌握':'遗忘中');
+  }
+
+  // ---------- KPI ----------
+  function updateKPI(){
+    let lit=0,sum=0; const bySubj=SUBJ.map(()=>0), bySubjN=SUBJ.map(()=>0);
+    for(const f of facets){ if(f.mast>0.5) lit++; sum+=f.mast; bySubj[f.subj]+=f.mast; bySubjN[f.subj]++; }
+    const rate=lit/TOTAL, avg=sum/TOTAL; let wi=0,wv=2;
+    for(let s=0;s<SUBJ.length;s++){ const m=bySubj[s]/bySubjN[s]; if(m<wv){wv=m;wi=s;} }
+    document.getElementById('k_total').textContent=TOTAL;
+    document.getElementById('k_lit').textContent=lit;
+    document.getElementById('k_rate').textContent=(rate*100).toFixed(0)+'%';
+    document.getElementById('k_avg').textContent=(avg*100).toFixed(0)+'%';
+    document.getElementById('k_weak').textContent=SUBJ[wi].name+' ('+(wv*100).toFixed(0)+'%)';
+    document.getElementById('codexCnt').textContent = lit+' / '+TOTAL;
+  }
+
+  // ---------- 标本图鉴（卡牌） ----------
+  const codexList=document.getElementById('codexList');
+  const cardEls=[];
+  function buildCodex(){
+    codexList.innerHTML='';
+    // 学科下拉
+    const fSubj=document.getElementById('fSubj');
+    for(let s=0;s<SUBJ.length;s++){ const o=document.createElement('option'); o.value=s; o.textContent=SUBJ[s].name; fSubj.appendChild(o); }
+    for(const f of facets){
+      const el=document.createElement('div'); el.className='card'; el.dataset.id=f.id;
+      el.innerHTML =
+        '<div class="cbar" style="background:hsl('+SUBJ[f.subj].h+',45%,'+THEME.chipL+'%)"></div>'+
+        '<div class="chead"><span class="gem" style="background:hsl('+SUBJ[f.subj].h+',45%,'+THEME.chipL+'%)"></span>'+
+          '<span class="ctitle">'+SUBJ[f.subj].name+' · 晶面 #'+(f.id%PER+1)+'</span></div>'+
+        '<div class="cmeta"><span class="cdot" style="background:hsl('+SUBJ[f.subj].h+',45%,'+THEME.chipL+'%)"></span>'+
+          '<span>难度 '+(f.diff*100).toFixed(0)+'%</span><span>关联 '+adj[f.id].length+'</span></div>'+
+        '<div class="cbar2"><i style="width:'+(f.mast*100).toFixed(0)+'%;background:linear-gradient(90deg,hsl('+SUBJ[f.subj].h+',25%,'+(THEME.chipL+18)+'%),hsl('+SUBJ[f.subj].h+',52%,'+THEME.chipL+'%))"></i></div>'+
+        '<div class="cstate">'+stateText(f)+'</div>';
+      el.addEventListener('mouseenter',()=>{ cardHoverId=f.id; });
+      el.addEventListener('mouseleave',()=>{ if(cardHoverId===f.id) cardHoverId=-1; });
+      el.addEventListener('click',()=>{ selectFacet(f.id,true); turnToFront(f.id); });
+      codexList.appendChild(el); cardEls[f.id]=el;
+    }
+    applyFilter();
+  }
+  function updateCodexCard(id){
+    const f=facets[id], el=cardEls[id]; if(!el) return;
+    el.querySelector('.cbar2 i').style.width=(f.mast*100).toFixed(0)+'%';
+    const cs=el.querySelector('.cstate'); if(cs) cs.textContent=stateText(f);
+    el.classList.toggle('lit', f.mastTarget>0.5);
+  }
+  function applyFilter(){
+    const fs=+document.getElementById('fSubj').value, sort=document.getElementById('fSort').value;
+    let ids=facets.map(f=>f.id);
+    if(fs>=0) ids=ids.filter(id=>facets[id].subj===fs);
+    ids.sort((a,b)=>{
+      if(sort==='weak'){ const ma=facets[a].mastTarget, mb=facets[b].mastTarget;
+        if(ma!==mb) return ma-mb; return facets[a].subj-facets[b].subj; }
+      if(sort==='mast') return facets[a].mast-facets[b].mast;
+      return facets[a].subj-facets[b].subj || a-b;
+    });
+    const frag=document.createDocumentFragment();
+    for(const id of ids) frag.appendChild(cardEls[id]);
+    codexList.appendChild(frag);
+  }
+  document.getElementById('fSubj').addEventListener('change',applyFilter);
+  document.getElementById('fSort').addEventListener('change',applyFilter);
+
+  // ---------- 选中 / 详情标本卡 ----------
+  const detail=document.getElementById('detail');
+  function selectFacet(id, fromCard){
+    selectedId=id;
+    for(const el of cardEls) el.classList.remove('sel');
+    if(cardEls[id]){ cardEls[id].classList.add('sel'); if(fromCard) cardEls[id].scrollIntoView({block:'nearest',behavior:'smooth'}); }
+    updateDetail(id);
+  }
+  function updateDetail(id){
+    if(id<0){ detail.classList.remove('show'); return; }
+    const f=facets[id];
+    detail.classList.add('show');
+    document.getElementById('d_title').textContent=SUBJ[f.subj].name+' · 晶面 #'+(f.id%PER+1);
+    document.getElementById('d_bar').style.background='hsl('+SUBJ[f.subj].h+',45%,'+THEME.chipL+'%)';
+    document.getElementById('d_subj').textContent=SUBJ[f.subj].name;
+    document.getElementById('d_sys').textContent=SUBJ[f.subj].sys;
+    document.getElementById('d_score').textContent=f.score;
+    document.getElementById('d_diff').textContent=(f.diff*100).toFixed(0)+'%';
+    document.getElementById('d_mast').textContent=(f.mast*100).toFixed(0)+'%';
+    document.getElementById('d_state').textContent=stateText(f);
+    const ad=document.getElementById('d_adj'); ad.innerHTML='';
+    for(const j of adj[id]){
+      const b=document.createElement('span'); b.className='adjchip'; b.textContent=SUBJ[facets[j].subj].name+'#'+(j%PER+1);
+      b.style.borderColor='hsl('+SUBJ[facets[j].subj].h+',45%,'+THEME.chipL+'%)';
+      b.addEventListener('click',()=>{ selectFacet(j,true); turnToFront(j); });
+      ad.appendChild(b);
+    }
+    const btn=document.getElementById('d_btn');
+    btn.textContent = f.mastTarget>0.5 ? '取消掌握' : '标记为已掌握';
+    btn.classList.toggle('off', f.mastTarget>0.5);
+  }
+  document.getElementById('d_close').addEventListener('click',()=>{ selectedId=-1; for(const el of cardEls) el.classList.remove('sel'); detail.classList.remove('show'); });
+  document.getElementById('d_btn').addEventListener('click',()=>{
+    if(selectedId<0) return;
+    const f=facets[selectedId];
+    applyMastery(selectedId, f.mastTarget>0.5?0:1, true);
+  });
+
+  function turnToFront(id){
+    const f=facets[id];
+    const ul=Math.hypot(f.bx,f.by,f.bz)||1;
+    const u=[f.bx/ul, f.by/ul, f.bz/ul];
+    qTarget=qFromTo(u, [0,0,1]);
+    turning=true;
+  }
+
+  // 图鉴收起/展开
+  document.getElementById('codexTog').addEventListener('click',()=>{
+    codexOpen=!codexOpen;
+    document.getElementById('codex').classList.toggle('collapsed', !codexOpen);
+    document.getElementById('codexTog').textContent = codexOpen ? '收起' : '展开';
+    document.getElementById('hint').style.left = codexOpen ? '316px' : '16px';
+  });
+
+  // ---------- 图例 ----------
+  (function(){
+    const c=document.getElementById('legend_chips'); let html='';
+    for(const s of SUBJ){ html+='<span class="chip" style="background:hsl('+s.h+',45%,'+THEME.chipL+'%)" title="'+s.name+'"></span>'; }
+    c.innerHTML=html;
+  })();
+
+  // ---------- 绘制 ----------
+  function draw(){
+    ctx.clearRect(0,0,W,H);
+    const g=ctx.createRadialGradient(W/2+cxOff(),H*0.46,40, W/2+cxOff(),H*0.5, Math.max(W,H)*0.72);
+    g.addColorStop(0, THEME.bg[0]); g.addColorStop(0.5, THEME.bg[1]); g.addColorStop(1, THEME.bg[2]);
+    ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+
+    const order=facets.map(f=>{ const pr=project(f); f.sx=pr.px; f.sy=pr.py; f.sz=pr.z2; f.sc=pr.sc; f.depth=pr.depth; return f; }).sort((a,b)=>a.sz-b.sz);
+    ctx.lineWidth=1;
+    for(const [i,j] of edges){
+      const a=facets[i], b=facets[j];
+      const dx=b.sx-a.sx, dy=b.sy-a.sy, len=Math.hypot(dx,dy)||1;
+      const Ra=facetR(a)*0.9, Rb=facetR(b)*0.9;        // 棱线收到菱形边界，连到晶体而非穿过
+      const x1=a.sx+dx/len*Ra, y1=a.sy+dy/len*Ra;
+      const x2=b.sx-dx/len*Rb, y2=b.sy-dy/len*Rb;
+      const al=0.10+0.14*(a.mast*0.5+b.mast*0.5);
+      ctx.strokeStyle=THEME.edge(SUBJ[a.subj].h, al.toFixed(3));
+      ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
+      drawDiamond(x1,y1,3.1,SUBJ[a.subj].h,a.mast);    // 线端点的菱形标志
+      drawDiamond(x2,y2,3.1,SUBJ[b.subj].h,b.mast);
+    }
+
+    for(const f of order){
+      const r=facetR(f);
+      const hl=(f.id===hovered)||(f.id===cardHoverId);
+      const col=facetColors(f);
+      ctx.save(); ctx.translate(f.sx,f.sy);
+      // 清晰菱形轮廓（节点标志）+ 宝石切面
+      ctx.beginPath(); ctx.moveTo(0,-r); ctx.lineTo(r,0); ctx.lineTo(0,r); ctx.lineTo(-r,0); ctx.closePath();
+      ctx.fillStyle=col.base; ctx.fill();
+      ctx.beginPath(); ctx.moveTo(0,-r); ctx.lineTo(r*0.5,0); ctx.lineTo(0,0); ctx.closePath(); ctx.fillStyle=col.tr; ctx.fill();
+      ctx.beginPath(); ctx.moveTo(0,-r); ctx.lineTo(-r*0.5,0); ctx.lineTo(0,0); ctx.closePath(); ctx.fillStyle=col.tl; ctx.fill();
+      ctx.beginPath(); ctx.moveTo(0,r); ctx.lineTo(r*0.5,0); ctx.lineTo(0,0); ctx.closePath(); ctx.fillStyle=col.bot; ctx.fill();
+      ctx.beginPath(); ctx.moveTo(0,r); ctx.lineTo(-r*0.5,0); ctx.lineTo(0,0); ctx.closePath(); ctx.fillStyle=col.bot; ctx.fill();
+      ctx.lineWidth=hl?1.8:1; ctx.strokeStyle=hl?THEME.hover:col.stroke;
+      ctx.beginPath(); ctx.moveTo(0,-r); ctx.lineTo(r,0); ctx.lineTo(0,r); ctx.lineTo(-r,0); ctx.closePath(); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(0,-r); ctx.lineTo(0,0); ctx.lineTo(0,r); ctx.stroke();
+      if(hl){ ctx.beginPath(); ctx.arc(0,0,r+5,0,Math.PI*2); ctx.strokeStyle=THEME.hover; ctx.lineWidth=1; ctx.stroke(); }
+      if(f.pulse>0.02){
+        ctx.beginPath(); ctx.arc(0,0,r+4+f.pulse*7,0,Math.PI*2);
+        ctx.strokeStyle='hsla('+SUBJ[f.subj].h+','+THEME.sparkS+'%,'+THEME.sparkL+'%,'+(f.pulse*0.5).toFixed(3)+')';
+        ctx.lineWidth=1; ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    for(const fl of flows){
+      const a=facets[fl.a], b=facets[fl.b];
+      const x=a.sx+(b.sx-a.sx)*fl.t, y=a.sy+(b.sy-a.sy)*fl.t;
+      ctx.beginPath(); ctx.arc(x,y,2.6,0,Math.PI*2);
+      ctx.fillStyle='hsl('+SUBJ[a.subj].h+','+THEME.flowS+'%,'+THEME.flowL+'%)'; ctx.fill();
+    }
+
+    ctx.globalAlpha=1;
+    for(const s of sparks){
+      ctx.save(); ctx.translate(s.x,s.y); ctx.rotate(s.life*3);
+      ctx.globalAlpha=Math.max(0,s.life);
+      ctx.fillStyle='hsl('+SUBJ[s.subj].h+','+THEME.sparkS+'%,'+THEME.sparkL+'%)';
+      const r=s.r; ctx.beginPath();
+      ctx.moveTo(0,-r); ctx.lineTo(r,0); ctx.lineTo(0,r); ctx.lineTo(-r,0); ctx.closePath(); ctx.fill();
+      ctx.restore();
+    }
+    ctx.globalAlpha=1;
+  }
+
+  // ---------- 主循环 ----------
+  let last=performance.now();
+  function loop(now){
+    const dt=Math.min(0.05,(now-last)/1000); last=now;
+    if(!dragging){
+      if(turning){ q=slerp(q,qTarget,Math.min(1,dt*4));
+        const d=Math.abs(q[0]*qTarget[0]+q[1]*qTarget[1]+q[2]*qTarget[2]+q[3]*qTarget[3]);
+        if(d>0.9999) turning=false;
+      } else if(spinAng>1e-4){ q=qNorm(qMul(qAxis(spinAxis[0],spinAxis[1],spinAxis[2],spinAng), q)); spinAng*=0.90; }
+      else if(!userActive){ q=qNorm(qMul(qAxis(0,1,0,0.0016), q)); }
+    }
+    for(const f of facets){
+      f.mast += (f.mastTarget-f.mast)*Math.min(1, dt*6.0);
+      if(f.pulse>0){ f.pulse*=Math.pow(0.06, dt); if(f.pulse<0.02) f.pulse=0; }
+    }
+    for(let i=sparks.length-1;i>=0;i--){
+      const s=sparks[i];
+      s.x+=s.vx*dt*60; s.y+=s.vy*dt*60; s.vy+=0.05*dt*60; s.vx*=0.96; s.vy*=0.96; s.life-=dt*1.5;
+      if(s.life<=0) sparks.splice(i,1);
+    }
+    flowTimer+=dt; if(flowTimer>0.6){ flowTimer=0; spawnFlow(); }
+    for(let i=flows.length-1;i>=0;i--){ flows[i].t+=flows[i].sp*dt; if(flows[i].t>=1) flows.splice(i,1); }
+    if(hovered>=0 && facets[hovered] && Math.random()<0.25) spawnSparks(facets[hovered].sx, facets[hovered].sy, facets[hovered].subj, 1, 0.5);
+
+    draw();
+    updatePanel(hovered>=0 ? facets[hovered] : null);
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+
+  // ---------- 校验接口 ----------
+  window.__probe=function(){
+    let lit=0,nan=0,minR=1e9,maxR=0,diamonds=0;
+    for(const f of facets){
+      if(f.mast>0.5) lit++;
+      if(!isFinite(f.sx)||!isFinite(f.sy)) nan++;
+      const r=facetR(f); if(isFinite(r)){ minR=Math.min(minR,r); maxR=Math.max(maxR,r); }
+    }
+    diamonds = edges.length*2; // 每条线两端各一个菱形节点
+    return { total:TOTAL, lit, nan, minR:+minR.toFixed(2), maxR:+maxR.toFixed(2),
+             crystalsVisible: minR>0.5, edges:edges.length, diamondNodes:diamonds,
+             zoom:zoom, zoomBounded:zoom>=0.5&&zoom<=2.2, codexOpen, selected:selectedId, cards:cardEls.length };
+  };
+
+  buildCodex();
+  updateKPI();
+})();
+</script>
+</body>
+</html>

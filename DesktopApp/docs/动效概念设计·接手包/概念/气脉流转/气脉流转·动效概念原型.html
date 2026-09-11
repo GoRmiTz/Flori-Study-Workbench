@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>气脉 · 流转 — 专注能量场</title>
+<style>
+  :root{
+    --ink:#0e1113; --ink2:#11171a; --line:rgba(120,165,175,.22);
+    --cyan:178,210,215; --txt:#cfe3e6; --dim:#7f979c; --weak:#d98b7a;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;}
+  html,body{height:100%;background:var(--ink);color:var(--txt);
+    font-family:"PingFang SC","Microsoft YaHei",system-ui,sans-serif;overflow:hidden;}
+  #wrap{position:fixed;inset:0;}
+  canvas{display:block;width:100%;height:100%;}
+  /* ---- mock topbar ---- */
+  .topbar{position:absolute;top:0;left:0;right:0;height:54px;display:flex;align-items:center;
+    padding:0 18px;gap:14px;background:linear-gradient(180deg,rgba(20,26,29,.96),rgba(14,17,19,.82));
+    border-bottom:1px solid var(--line);backdrop-filter:blur(4px);z-index:5;}
+  .brand{display:flex;align-items:center;gap:9px;font-weight:600;letter-spacing:.5px;}
+  .brand .dot{width:9px;height:9px;border-radius:50%;background:rgb(var(--cyan));box-shadow:0 0 0 0 transparent;}
+  .tabs{display:flex;gap:4px;margin-left:8px;}
+  .tab{font-size:13px;color:var(--dim);padding:6px 12px;border-radius:7px;cursor:default;transition:.2s;}
+  .tab.on{color:var(--txt);background:rgba(var(--cyan),.10);}
+  .spacer{flex:1;}
+  .avatar{width:30px;height:30px;border-radius:50%;background:linear-gradient(135deg,#2a3a3d,#162022);
+    border:1px solid var(--line);display:flex;align-items:center;justify-content:center;font-size:12px;color:var(--dim);}
+  /* ---- KPI bar ---- */
+  .kpi{position:absolute;top:62px;left:18px;right:18px;display:flex;gap:10px;z-index:4;flex-wrap:wrap;}
+  .tile{background:rgba(20,26,29,.7);border:1px solid var(--line);border-radius:10px;
+    padding:9px 14px;min-width:118px;}
+  .tile .k{font-size:11px;color:var(--dim);letter-spacing:.4px;}
+  .tile .v{font-size:20px;font-weight:600;margin-top:2px;font-variant-numeric:tabular-nums;}
+  .tile .v small{font-size:12px;color:var(--dim);font-weight:400;margin-left:2px;}
+  /* ---- hover probe panel ---- */
+  .panel{position:absolute;pointer-events:none;background:rgba(16,22,25,.94);border:1px solid var(--line);
+    border-radius:9px;padding:9px 12px;font-size:12.5px;line-height:1.7;z-index:6;display:none;
+    box-shadow:0 6px 22px rgba(0,0,0,.4);min-width:148px;}
+  .panel b{color:var(--txt);font-weight:600;}
+  .panel .lab{color:var(--dim);}
+  .panel .bar{height:5px;border-radius:3px;background:rgba(var(--cyan),.15);margin-top:5px;overflow:hidden;}
+  .panel .bar i{display:block;height:100%;background:rgb(var(--cyan));}
+  /* ---- hint ---- */
+  .hint{position:absolute;left:18px;bottom:14px;font-size:11.5px;color:var(--dim);z-index:4;
+    line-height:1.7;max-width:340px;}
+  .hint b{color:var(--txt);font-weight:500;}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div class="topbar">
+    <div class="brand"><span class="dot"></span>芙洛理 · 考点星图</div>
+    <div class="tabs">
+      <div class="tab">知识库</div><div class="tab">练考</div><div class="tab">复盘</div>
+      <div class="tab on">气脉</div>
+    </div>
+    <div class="spacer"></div>
+    <div class="avatar">Go</div>
+  </div>
+  <div class="kpi" id="kpi">
+    <div class="tile"><div class="k">峰值强度</div><div class="v" id="k_peak">–</div></div>
+    <div class="tile"><div class="k">均值强度</div><div class="v" id="k_mean">–</div></div>
+    <div class="tile"><div class="k">高强区占比</div><div class="v" id="k_high">–</div></div>
+    <div class="tile"><div class="k">薄弱点</div><div class="v" id="k_weak">–</div></div>
+    <div class="tile"><div class="k">总体掌握</div><div class="v" id="k_ov">–</div></div>
+  </div>
+  <canvas id="c"></canvas>
+  <div class="panel" id="panel"></div>
+  <div class="hint">
+    <b>悬停</b>任意处→探针读该点强度与所属(学科·维度) ·
+    <b>点击 / 拖动</b>在某学科·维度上→注入专注、局部抬升场强(确定性收敛) ·
+    <b>滚轮</b>缩放。单色墨青·明度表达强弱·零辉光。
+  </div>
+</div>
+<script>
+(function(){
+  "use strict";
+  const cv=document.getElementById('c'), ctx=cv.getContext('2d');
+  const panel=document.getElementById('panel');
+  let W=0,H=0,DPR=1;
+
+  // ---- field offscreen ----
+  const FW=224, FH=140;
+  const off=document.createElement('canvas'); off.width=FW; off.height=FH;
+  const octx=off.getContext('2d');
+  const fimg=octx.createImageData(FW,FH);
+  let dirty=true;
+
+  // ---- data: subject x dimension grid ----
+  const SUBJ=['行测','申论','常识','时政','专业课'];
+  const DIM =['理解','记忆','运用','熟练'];
+  function hash(a,b){ let x=Math.sin(a*127.1+b*311.7)*43758.5453; return x-Math.floor(x); }
+  const samples=[];
+  for(let j=0;j<SUBJ.length;j++)for(let i=0;i<DIM.length;i++){
+    const v=0.18+0.62*hash(j*3+1,i*7+2);          // deterministic 0.18..0.80
+    samples.push({j,i,sx:(j+0.5)/SUBJ.length, sy:(i+0.5)/DIM.length,
+                  subj:SUBJ[j], dim:DIM[i], val:v, target:v});
+  }
+  const SIG=0.165;
+  function fieldAt(nx,ny){
+    let num=0,den=0;
+    for(let k=0;k<samples.length;k++){
+      const s=samples[k], dx=nx-s.sx, dy=ny-s.sy;
+      const g=Math.exp(-(dx*dx+dy*dy)/(2*SIG*SIG));
+      num+=s.val*g; den+=g;
+    }
+    return den>0?num/den:0;
+  }
+  function hsl(h,s,l){ s/=100;l/=100;const c=(1-Math.abs(2*l-1))*s, x=c*(1-Math.abs((h/60)%2-1)), m=l-c/2;
+    let r,g,b; if(h<60){r=c;g=x;b=0;}else if(h<120){r=x;g=c;b=0;}else if(h<180){r=0;g=c;b=x;}
+    else if(h<240){r=0;g=x;b=c;}else if(h<300){r=x;g=0;b=c;}else{r=c;g=0;b=x;}
+    return [Math.round((r+m)*255),Math.round((g+m)*255),Math.round((b+m)*255)]; }
+
+  function renderField(){
+    const d=fimg.data;
+    for(let py=0;py<FH;py++){
+      const ny=py/FH;
+      for(let px=0;px<FW;px++){
+        const nx=px/FW, f=fieldAt(nx,ny), idx=(py*FW+px)*4;
+        let L=8+f*54, S=36;
+        if(Math.abs(f-0.25)<0.020){L=60;S=46;}
+        else if(Math.abs(f-0.45)<0.020){L=68;S=50;}
+        else if(Math.abs(f-0.65)<0.018){L=76;S=54;}
+        else if(Math.abs(f-0.85)<0.016){L=84;S=58;}
+        const c=hsl(190,S,L);
+        d[idx]=c[0]; d[idx+1]=c[1]; d[idx+2]=c[2]; d[idx+3]=255;
+      }
+    }
+    octx.putImageData(fimg,0,0); dirty=false;
+  }
+
+  // ---- viewport mapping ----
+  const M={l:70,r:26,t:108,b:70};
+  let Z=1.0;
+  function plot(){ return {x:M.l,y:M.t,w:W-M.l-M.r,h:H-M.t-M.b,cx:W/2,cy:M.t+(H-M.t-M.b)/2}; }
+  function fieldRect(){ const p=plot(); return [p.cx+(M.l-p.cx)*Z, p.cy+(M.t-p.cy)*Z, p.w*Z, p.h*Z]; }
+  function fieldToScreen(nx,ny){ const p=plot(); const bx=M.l+nx*p.w, by=M.t+ny*p.h;
+    return [p.cx+(bx-p.cx)*Z, p.cy+(by-p.cy)*Z]; }
+  function screenToField(sx,sy){ const p=plot(); const bx=p.cx+(sx-p.cx)/Z, by=p.cy+(sy-p.cy)/Z;
+    return [(bx-M.l)/p.w, (by-M.t)/p.h]; }
+
+  // ---- interaction state ----
+  let hover=null, hoverF=0, hoverS=null;
+  let pointerDown=false, userTouched=false;
+  let autoT=0, autoBoosted=false;
+
+  cv.addEventListener('pointermove',e=>{
+    userTouched=true;
+    const r=cv.getBoundingClientRect();
+    const x=e.clientX-r.left, y=e.clientY-r.top;
+    const [nx,ny]=screenToField(x,y);
+    if(nx<0||nx>1||ny<0||ny>1){ hover=null; panel.style.display='none'; return; }
+    hover={x,y}; hoverF=fieldAt(nx,ny);
+    let best=null,bd=1e9;
+    for(const s of samples){const dx=nx-s.sx,dy=ny-s.sy,d=dx*dx+dy*dy; if(d<bd){bd=d;best=s;}}
+    hoverS=best;
+    panel.style.display='block';
+    panel.style.left=(x+16)+'px'; panel.style.top=(y+14)+'px';
+    panel.innerHTML='<div><span class="lab">位置</span> <b>'+best.subj+' · '+best.dim+'</b></div>'+
+      '<div><span class="lab">强度</span> <b>'+(hoverF*100).toFixed(0)+'%</b></div>'+
+      '<div class="bar"><i style="width:'+(hoverF*100).toFixed(0)+'%"></i></div>';
+    if(pointerDown) boostAt(nx,ny);
+  });
+  cv.addEventListener('pointerleave',()=>{ hover=null; panel.style.display='none'; });
+  cv.addEventListener('pointerdown',e=>{
+    userTouched=true; pointerDown=true; cv.setPointerCapture(e.pointerId);
+    const r=cv.getBoundingClientRect();
+    const [nx,ny]=screenToField(e.clientX-r.left,e.clientY-r.top);
+    if(nx>=0&&nx<=1&&ny>=0&&ny<=1) boostAt(nx,ny);
+  });
+  cv.addEventListener('pointerup',()=>{ pointerDown=false; });
+  cv.addEventListener('wheel',e=>{
+    e.preventDefault(); userTouched=true;
+    Z*=(1 - e.deltaY*0.0012); Z=Math.max(0.65,Math.min(2.6,Z));
+  },{passive:false});
+
+  function boostAt(nx,ny){
+    let bi=-1,bd=0.020;                 // within ~0.14 field-space radius
+    for(let k=0;k<samples.length;k++){
+      const s=samples[k], dx=nx-s.sx, dy=ny-s.sy, d=dx*dx+dy*dy;
+      if(d<bd){bd=d;bi=k;}
+    }
+    if(bi>=0){ samples[bi].target=1; }
+  }
+
+  // ---- KPI ----
+  const elPeak=document.getElementById('k_peak'), elMean=document.getElementById('k_mean'),
+        elHigh=document.getElementById('k_high'), elWeak=document.getElementById('k_weak'),
+        elOv=document.getElementById('k_ov');
+  function computeKPI(){
+    let peak=0,sum=0,n=0,hi=0;
+    const GX=48,GY=30;
+    for(let i=0;i<GY;i++)for(let j=0;j<GX;j++){
+      const f=fieldAt(j/(GX-1), i/(GY-1));
+      if(f>peak)peak=f; sum+=f; n++; if(f>=0.6)hi++;
+    }
+    let weak=0,sov=0; for(const s of samples){ if(s.val<0.4)weak++; sov+=s.val; }
+    return {peak,mean:sum/n,highPct:hi/n,weak,overall:sov/samples.length};
+  }
+  function updateKPI(){
+    const k=computeKPI();
+    elPeak.textContent=(k.peak*100).toFixed(0)+'%';
+    elMean.textContent=(k.mean*100).toFixed(0)+'%';
+    elHigh.textContent=(k.highPct*100).toFixed(0)+'%';
+    elWeak.textContent=k.weak+' 处';
+    elOv.textContent=(k.overall*100).toFixed(0)+'%';
+  }
+
+  // ---- draw helpers ----
+  function drawAxes(){
+    const p=plot();
+    ctx.save();
+    ctx.strokeStyle='rgba(120,165,175,.14)'; ctx.lineWidth=1; ctx.fillStyle='rgba(127,151,156,.72)';
+    ctx.font='12px "PingFang SC",sans-serif';
+    // vertical column guides + subject labels
+    for(let j=0;j<SUBJ.length;j++){
+      const [x]=fieldToScreen((j+0.5)/SUBJ.length,0);
+      ctx.beginPath(); ctx.moveTo(x, M.t); ctx.lineTo(x, H-M.b); ctx.stroke();
+      ctx.textAlign='center'; ctx.fillText(SUBJ[j], x, H-M.b+18);
+    }
+    // horizontal row guides + dim labels
+    for(let i=0;i<DIM.length;i++){
+      const [,y]=fieldToScreen(0,(i+0.5)/DIM.length);
+      ctx.beginPath(); ctx.moveTo(M.l, y); ctx.lineTo(W-M.r, y); ctx.stroke();
+      ctx.textAlign='right'; ctx.fillText(DIM[i], M.l-10, y+4);
+    }
+    ctx.textAlign='left'; ctx.fillStyle='rgba(127,151,156,.5)';
+    ctx.fillText('学科 →', M.l, H-M.b+38);
+    ctx.save(); ctx.translate(M.l-52, M.t+18); ctx.rotate(-Math.PI/2);
+    ctx.fillText('维度 →', 0,0); ctx.restore();
+    ctx.restore();
+  }
+  function drawSamples(){
+    for(const s of samples){
+      const [x,y]=fieldToScreen(s.sx,s.sy);
+      const r=2.2+s.val*4.2;
+      const c=hsl(190,46,30+s.val*46);
+      ctx.beginPath(); ctx.arc(x,y,r,0,Math.PI*2);
+      ctx.fillStyle='rgb('+c[0]+','+c[1]+','+c[2]+')'; ctx.fill();
+      if(s.val<0.4){ // weak marker: small cross
+        ctx.strokeStyle='rgba(217,139,122,.9)'; ctx.lineWidth=1.4;
+        ctx.beginPath(); ctx.moveTo(x-5,y); ctx.lineTo(x+5,y); ctx.moveTo(x,y-5); ctx.lineTo(x,y+5); ctx.stroke();
+      } else {
+        ctx.strokeStyle='rgba(190,220,225,.5)'; ctx.lineWidth=1; ctx.stroke();
+      }
+    }
+  }
+  function drawProbe(){
+    if(!hover) return;
+    ctx.save();
+    ctx.strokeStyle='rgba(190,220,225,.55)'; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.arc(hover.x,hover.y,9,0,Math.PI*2); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(hover.x-13,hover.y); ctx.lineTo(hover.x-4,hover.y);
+    ctx.moveTo(hover.x+4,hover.y); ctx.lineTo(hover.x+13,hover.y);
+    ctx.moveTo(hover.x,hover.y-13); ctx.lineTo(hover.x,hover.y-4);
+    ctx.moveTo(hover.x,hover.y+4); ctx.lineTo(hover.x,hover.y+13); ctx.stroke();
+    ctx.restore();
+  }
+  function drawAuto(){
+    if(userTouched) return;
+    autoT+=0.016;
+    const nx=0.5+0.34*Math.cos(autoT*0.7), ny=0.5+0.34*Math.sin(autoT*0.9);
+    const [x,y]=fieldToScreen(nx,ny);
+    ctx.save();
+    ctx.strokeStyle='rgba(190,220,225,.28)'; ctx.lineWidth=1; ctx.setLineDash([3,4]);
+    ctx.beginPath(); ctx.arc(x,y,7,0,Math.PI*2); ctx.stroke(); ctx.restore();
+  }
+
+  // ---- main loop ----
+  let kpiTick=0;
+  function frame(){
+    // deterministic spring settle of sample values
+    let changed=false;
+    for(const s of samples){
+      const nv=s.val+(s.target-s.val)*0.14;
+      if(Math.abs(nv-s.val)>0.0006){ s.val=nv; changed=true; }
+    }
+    if(changed||dirty) renderField();
+
+    // auto-boost the weakest once, to show the field responds
+    if(!autoBoosted && autoT>1.6){ autoBoosted=true;
+      let wi=0,wv=9; samples.forEach((s,k)=>{ if(s.val<wv){wv=s.val;wi=k;} });
+      samples[wi].target=1;
+    }
+    if(!userTouched) autoT+=0.016;
+
+    ctx.fillStyle='#0e1113'; ctx.fillRect(0,0,W,H);
+    const [rx,ry,rw,rh]=fieldRect();
+    ctx.imageSmoothingEnabled=true;
+    ctx.drawImage(off, rx,ry,rw,rh);
+    ctx.strokeStyle='rgba(120,165,175,.30)'; ctx.lineWidth=1; ctx.strokeRect(rx,ry,rw,rh);
+
+    drawAxes(); drawSamples(); drawProbe(); drawAuto();
+
+    if((kpiTick++ % 6)===0) updateKPI();
+    requestAnimationFrame(frame);
+  }
+
+  function resize(){
+    DPR=Math.min(2, window.devicePixelRatio||1);
+    W=cv.clientWidth; H=cv.clientHeight;
+    cv.width=W*DPR; cv.height=H*DPR;
+    ctx.setTransform(DPR,0,0,DPR,0,0);
+    dirty=true;
+  }
+  window.addEventListener('resize',resize);
+  resize(); renderField(); updateKPI(); requestAnimationFrame(frame);
+
+  // ---- headless probes ----
+  window.__kpi=computeKPI;
+  window.__probe=(x,y)=>{ const [nx,ny]=screenToField(x,y);
+    if(nx<0||nx>1||ny<0||ny>1) return null;
+    const f=fieldAt(nx,ny); let best=null,bd=1e9;
+    for(const s of samples){const dx=nx-s.sx,dy=ny-s.sy,d=dx*dx+dy*dy; if(d<bd){bd=d;best=s;}}
+    return {value:f, subj:best.subj, dim:best.dim}; };
+  window.__boost=(i)=>{ if(samples[i]) samples[i].target=1; };
+  window.__weakest=()=>{ let wi=0,wv=9; samples.forEach((s,k)=>{if(s.val<wv){wv=s.val;wi=k;}}); return wi; };
+  window.__state=()=>({samples:samples.length, dirty, Z});
+})();
+</script>
+</body>
+</html>

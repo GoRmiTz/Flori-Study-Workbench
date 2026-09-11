@@ -1,0 +1,805 @@
+#include "views/ProfileView.h"
+#include "app/Cloud.h"
+#include "core/Hwnd.h"
+#include "ui/FieldText.h"
+#include "ui/Layout.h"
+#include <algorithm>
+#include <cmath>
+#include <ctime>
+
+namespace lj {
+
+namespace {
+bool Hit(const D2D1_RECT_F& r, float x, float y)
+{
+    return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+}
+
+const wchar_t* kGenders[] = { L"男", L"女", L"保密" };
+const int kGenderN = 3;
+
+std::wstring PvFormatTs(long long ts)
+{
+    if (ts <= 0) return L"—";
+    time_t t = (time_t)(ts / 1000);
+    tm lt{};
+    localtime_s(&lt, &t);
+    wchar_t buf[32];
+    swprintf_s(buf, L"%04d-%02d-%02d %02d:%02d",
+               lt.tm_year + 1900, lt.tm_mon + 1, lt.tm_mday, lt.tm_hour, lt.tm_min);
+    return buf;
+}
+
+std::wstring KindLabel(const std::wstring& k)
+{
+    if (k == L"column") return L"专栏";
+    if (k == L"video")  return L"视频";
+    if (k == L"image")  return L"图片";
+    if (k == L"audio")  return L"音频";
+    return L"内容";
+}
+} // namespace
+
+// ============================================================
+//  Win32 EDIT 子类化
+// ============================================================
+LRESULT CALLBACK ProfileView::EditProc(HWND w, UINT msg, WPARAM wp, LPARAM lp)
+{
+    ProfileView* self = (ProfileView*)GetWindowLongPtrW(w, GWLP_USERDATA);
+    if (self) {
+        if (msg == WM_KEYDOWN) {
+            if (wp == VK_RETURN) { self->CommitEdit(); return 0; }
+            if (wp == VK_ESCAPE) { self->CancelEdit(); return 0; }
+        } else if (msg == WM_KILLFOCUS) {
+            self->CommitEdit();
+        } else if (msg == WM_SETFOCUS) {
+            int len = GetWindowTextLengthW(w);
+            SendMessageW(w, EM_SETSEL, (WPARAM)len, (LPARAM)len);  // 焦点时光标置文末
+        }
+    }
+    WNDPROC old = self ? self->m_editOld : nullptr;
+    LRESULT r = old ? CallWindowProcW(old, w, msg, wp, lp) : DefWindowProcW(w, msg, wp, lp);
+    // 隐藏隐藏代理 EDIT 的原生系统光标：我们用 D3D 自绘光标，
+    // 否则原生光标会在 1×1 代理所在的输入框左上角闪一下。
+    if (msg == WM_SETFOCUS || msg == WM_KEYDOWN || msg == WM_CHAR ||
+        msg == WM_IME_STARTCOMPOSITION || msg == WM_IME_COMPOSITION || msg == WM_IME_CHAR)
+        HideCaret(w);
+    return r;
+}
+
+void ProfileView::EnsureEditor()
+{
+    if (m_edit) return;
+    HWND parent = AppHwnd();
+    if (!parent) return;
+    // 不加 WS_EX_TRANSPARENT：编辑态铺成字段全尺寸收鼠标（点击定位/拖拽框选），
+    // 配合 WM_SETREDRAW(FALSE) 不自绘——文字/光标/选区全由 D3D 绘制。
+    m_edit = CreateWindowExW(0, L"EDIT", L"",
+                             WS_CHILD | ES_AUTOHSCROLL | ES_LEFT,
+                             0, 0, 10, 10, parent, nullptr,
+                             (HINSTANCE)GetWindowLongPtrW(parent, GWLP_HINSTANCE), nullptr);
+    if (!m_edit) return;
+    m_editOld = (WNDPROC)SetWindowLongPtrW(m_edit, GWLP_WNDPROC, (LONG_PTR)EditProc);
+    SetWindowLongPtrW(m_edit, GWLP_USERDATA, (LONG_PTR)this);
+    m_editFont = CreateFontW(-16, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                             DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                             DEFAULT_QUALITY, DEFAULT_PITCH | FF_DONTCARE,
+                             L"Microsoft YaHei UI");
+    if (m_editFont) SendMessageW(m_edit, WM_SETFONT, (WPARAM)m_editFont, TRUE);
+    ShowWindow(m_edit, SW_HIDE);
+}
+
+void ProfileView::BeginEdit(int field, const D2D1_RECT_F& r)
+{
+    EnsureEditor();
+    if (!m_edit) return;
+    if (m_editingOn) CommitEdit();
+    m_editField = field;
+    m_editingOn = true;
+    // 所有资料格背板都是纯 paperHi，输入框背景与其一致 → 无缝
+    lj::SetEditBackdrop(AppPalette().paperHi);
+
+    std::wstring cur;
+    switch (field) {
+        case PF_BIO:    cur = m_profile.bio; break;
+        case PF_MAJOR:  cur = m_profile.major; break;
+        case PF_SCHOOL: cur = m_profile.school; break;
+        case PF_BIRTH:  cur = m_profile.birthday; break;
+        default: break;
+    }
+    SetWindowTextW(m_edit, cur.c_str());
+
+    // 编辑框铺满字段全尺寸（内部处理鼠标点击定位/拖拽框选），
+    // WM_SETREDRAW(FALSE) 禁止自绘——可见文字/光标/选区全由 D3D 绘制。
+    float s = (float)AppDpi() / 96.0f;
+    int L = (int)(r.left * s);
+    int T = (int)((r.top - ScrollY()) * s);
+    int W = (int)((r.right - r.left) * s), H = (int)((r.bottom - r.top) * s);
+    SetWindowPos(m_edit, nullptr, L, T, W > 1 ? W : 1, H > 1 ? H : 1, SWP_NOZORDER);
+    SendMessageW(m_edit, WM_SETREDRAW, FALSE, 0);
+    ShowWindow(m_edit, SW_SHOW);
+    SetFocus(m_edit);
+    // 光标置于文末（默认在文首，与「点输入框→光标在末尾」的预期相悖）
+    int len = GetWindowTextLengthW(m_edit);
+    SendMessageW(m_edit, EM_SETSEL, (WPARAM)len, (LPARAM)len);
+}
+
+void ProfileView::DebugForceOpen()
+{
+    // 截图自检：强制打开「简介」编辑，验证隐藏代理 + D3D 自绘无覆盖块
+    BeginEdit(PF_BIO, m_fieldRects[PF_BIO]);
+}
+
+void ProfileView::CommitEdit()
+{
+    if (!m_editingOn || !m_edit) { m_editingOn = false; return; }
+    int n = GetWindowTextLengthW(m_edit);
+    std::wstring txt; txt.resize((size_t)n + 1);
+    GetWindowTextW(m_edit, &txt[0], n + 1);
+    txt.resize((size_t)n);
+
+    switch (m_editField) {
+        case PF_BIO:    m_profile.bio = txt; break;
+        case PF_MAJOR:  m_profile.major = txt; break;
+        case PF_SCHOOL: m_profile.school = txt; break;
+        case PF_BIRTH:  m_profile.birthday = txt; break;
+        default: break;
+    }
+    SendMessageW(m_edit, WM_SETREDRAW, TRUE, 0);   // 恢复自绘能力（隐藏后不再画）
+    ShowWindow(m_edit, SW_HIDE);
+    m_editingOn = false;
+    m_editField = -1;
+    SaveProfile();
+}
+
+void ProfileView::CancelEdit()
+{
+    if (m_edit) {
+        SendMessageW(m_edit, WM_SETREDRAW, TRUE, 0);
+        ShowWindow(m_edit, SW_HIDE);
+    }
+    m_editingOn = false;
+    m_editField = -1;
+}
+
+void ProfileView::SaveProfile()
+{
+    AccountStore::Instance().SaveProfile(m_profile);
+    TrySyncProfile();
+}
+
+void ProfileView::TrySyncProfile()
+{
+    auto& cloud = Cloud::Instance();
+    if (!cloud.LoggedIn()) return;   // 未登录云端：仅本地保存
+
+    // 超长字段拦截（与服务端 PROFILE_LIMITS 对齐：bio500/major40/school80/birthday20/gender10）
+    auto over = [&](const std::wstring& v, size_t lim, const wchar_t* name) -> bool {
+        if (v.size() > lim) {
+            m_toast = std::wstring(name) + L"过长（上限 " + std::to_wstring(lim) + L" 字），未同步云端，仅存本机";
+            m_toastBad = true; m_toastT = 4.0f;
+            return true;
+        }
+        return false;
+    };
+    if (over(m_profile.bio, 500, L"简介") ||
+        over(m_profile.major, 40, L"专业") ||
+        over(m_profile.school, 80, L"学校") ||
+        over(m_profile.birthday, 20, L"生日") ||
+        over(m_profile.gender, 10, L"性别")) {
+        return;   // 本地已保存，仅拦截云端
+    }
+
+    // 后台线程上推，UI 线程绝不直接碰网络 IO；快照避免与 UI 写竞争
+    AccountProfile snap = m_profile;
+    cloud.RunAsync([this, snap] {
+        std::wstring err;
+        CloudResult rc = Cloud::Instance().UpdateProfile(snap, err);
+        if (rc == CloudResult::Rejected) m_cloudPushFailed = true;  // 由 UI 线程消费提示
+        // Offline：静默降级，不弹错（本地已保存）
+    });
+}
+
+void ProfileView::CycleGender()
+{
+    int cur = -1;
+    for (int i = 0; i < kGenderN; ++i) if (m_profile.gender == kGenders[i]) { cur = i; break; }
+    cur = (cur + 1 + kGenderN + (cur < 0 ? 1 : 0)) % kGenderN;
+    m_profile.gender = kGenders[cur];
+    SaveProfile();
+}
+
+// ============================================================
+void ProfileView::ReloadAll()
+{
+    auto& as = AccountStore::Instance();
+    auto& cs = CheckinStore::Instance();
+    m_profile = as.LoadProfile();
+
+    // 档案上云（P1-1）：已登录则后台拉取云端最新档案，合并到本地（跨设备可见）
+    if (Cloud::Instance().LoggedIn()) {
+        Cloud::Instance().RunAsync([this] {
+            std::wstring err;
+            AccountProfile p = Cloud::Instance().GetProfile(err);
+            bool has = !p.bio.empty() || !p.major.empty() || !p.school.empty() ||
+                       !p.birthday.empty() || !p.gender.empty();
+            if (has) {
+                std::lock_guard<std::mutex> lk(m_pendingMu);
+                m_pendingProfile = p;
+                m_hasPending = true;
+            }
+        });
+    }
+    m_favs = cs.LoadFavorites();
+    m_hist = cs.LoadHistory();
+
+    // 我的专栏
+    auto cols = cs.LoadColumns();
+    std::wstring me = as.CurrentName();
+    m_colCount = 0;
+    for (const auto& c : cols) if (c.author.empty() || c.author == me) m_colCount++;
+
+    // 打卡天数（近 120 天里有任一勾选的日子）
+    m_checkDays = 0;
+    auto days = cs.LastNDays(120);
+    for (const auto& d : days) {
+        auto dm = cs.LoadDay(d);
+        bool any = false;
+        for (const auto& kv : dm) if (kv.second) { any = true; break; }
+        if (any) m_checkDays++;
+    }
+
+    // 累计专注
+    m_focusMin = 0;
+    for (const auto& f : cs.LoadFocus()) m_focusMin += f.min;
+
+    // 收藏 / 历史：新的在前
+    std::sort(m_favs.begin(), m_favs.end(),
+              [](const Favorite& a, const Favorite& b) { return a.ts > b.ts; });
+    std::sort(m_hist.begin(), m_hist.end(),
+              [](const HistoryItem& a, const HistoryItem& b) { return a.ts > b.ts; });
+}
+
+void ProfileView::OnEnter()
+{
+    View::OnEnter();
+    m_t = 0.0f;
+    m_toastT = 0.0f;
+    m_hoverFav = -1;
+    m_hoverField = -1;
+    if (m_editingOn) CancelEdit();
+    ReloadAll();
+}
+
+void ProfileView::OnLeave()
+{
+    if (m_editingOn) CommitEdit();
+}
+
+// ============================================================
+//  布局
+// ============================================================
+void ProfileView::Layout(const D2D1_RECT_F& area, Canvas& cv)
+{
+    View::Layout(area, cv);
+
+    float availW = area.right - area.left;
+    float contentW = (std::min)(shape::kMaxWidth, availW - 72.0f);
+    float x0 = area.left + (availW - contentW) * 0.5f;
+
+    // 纵向流式布局：区块只声明自身高度，位置由 flow 推进
+    lj::ui::VLayout flow(x0, area.top + 30.0f, contentW, 0.0f);
+
+    // ---- 标题区 ----
+    m_contentTop = flow.cursorY;
+    flow.block(96.0f);
+
+    // ---- 名片区 ----
+    const float heroH = 176.0f;
+    {
+        float top = flow.block(heroH + 14.0f).top;
+        m_heroRect = { x0, top, x0 + contentW, top + heroH };
+        m_avatar = { x0 + 24.0f, top + 26.0f, x0 + 24.0f + 84.0f, top + 26.0f + 84.0f };
+        float infoL = m_avatar.right + 24.0f;
+        m_bioRect = { infoL, top + 96.0f, m_heroRect.right - 24.0f, top + 96.0f + 40.0f };
+        m_fieldRects[PF_BIO] = m_bioRect;
+    }
+
+    // ---- 资料四格：专业 / 学校 / 生日 / 性别 ----
+    {
+        float gap = 10.0f;
+        int cols = (contentW >= 700.0f) ? 4 : 2;
+        float fw = (contentW - gap * (cols - 1)) / (float)cols;
+        const int order[4] = { PF_MAJOR, PF_SCHOOL, PF_BIRTH, PF_GENDER };
+        int rows = (4 + cols - 1) / cols;
+        float top = flow.block(rows * (62.0f + gap) + 12.0f).top;
+        for (int i = 0; i < 4; ++i) {
+            int r = i / cols, c = i % cols;
+            float fx = x0 + c * (fw + gap);
+            float fy = top + r * (62.0f + gap);
+            m_fieldRects[order[i]] = { fx, fy, fx + fw, fy + 62.0f };
+        }
+    }
+
+    // ---- 统计条 ----
+    {
+        float gap = 10.0f;
+        float sw = (contentW - gap * 3) / 4.0f;
+        m_statsY = flow.block(66.0f + 26.0f).top;
+        for (int i = 0; i < 4; ++i) {
+            float sx = x0 + i * (sw + gap);
+            m_statRects[i] = { sx, m_statsY, sx + sw, m_statsY + 66.0f };
+        }
+    }
+
+    // ---- 收藏区 ----
+    m_favTitleY = flow.block(44.0f).top;
+    m_favHits.clear();
+    if (m_favs.empty()) {
+        flow.block(56.0f);
+    } else {
+        int n = (std::min)((int)m_favs.size(), 20);
+        for (int i = 0; i < n; ++i) {
+            float top = flow.block(54.0f + 8.0f).top;
+            m_favHits.push_back({ { x0, top, x0 + contentW, top + 54.0f }, i });
+        }
+    }
+    flow.block(18.0f);
+
+    // ---- 历史区 ----
+    m_histTitleY = flow.block(44.0f).top;
+    m_histRects.clear();
+    if (m_hist.empty()) {
+        flow.block(56.0f);
+    } else {
+        int n = (std::min)((int)m_hist.size(), 24);
+        for (int i = 0; i < n; ++i) {
+            float top = flow.block(40.0f + 6.0f).top;
+            m_histRects.push_back({ x0, top, x0 + contentW, top + 40.0f });
+        }
+    }
+    flow.block(22.0f);
+
+    // ---- 返回 ----
+    m_backBtn.label = L"返 回 首 页";
+    m_backBtn.tag = L"00";
+    m_backBtn.fontSize = 13.0f;
+    {
+        float top = flow.block(46.0f + 30.0f).top;
+        m_backBtn.bounds = { x0, top, x0 + 150.0f, top + 46.0f };
+    }
+    m_backBtn.onClick = [this] { Go(L"home"); };
+
+    SetContentHeight(flow.cursorY - area.top);
+
+    m_widgets.clear();
+    m_widgets.push_back(&m_backBtn);
+}
+
+// ============================================================
+//  更新
+// ============================================================
+void ProfileView::Update(float dt, const Input& in)
+{
+    View::Update(dt, in);
+    m_t += dt;
+    if (m_toastT > 0.0f) m_toastT = (std::max)(0.0f, m_toastT - dt);
+
+    // 档案上云（P1-1）：消费云端拉取的待合并档案（仅在 UI 线程写 m_profile，本地为基准）
+    if (m_hasPending.exchange(false)) {
+        AccountProfile p;
+        { std::lock_guard<std::mutex> lk(m_pendingMu); p = m_pendingProfile; }
+        AccountProfile merged = m_profile;
+        if (!p.bio.empty())      merged.bio = p.bio;
+        if (!p.major.empty())    merged.major = p.major;
+        if (!p.school.empty())   merged.school = p.school;
+        if (!p.birthday.empty()) merged.birthday = p.birthday;
+        if (!p.gender.empty())   merged.gender = p.gender;
+        m_profile = merged;
+        SaveProfile();   // 落本地并幂等回推
+    }
+    if (m_cloudPushFailed.exchange(false)) {
+        m_toast = L"档案同步失败（云端已拒绝，内容已存本机）";
+        m_toastBad = true; m_toastT = 4.0f;
+    }
+
+    Input shifted = in;
+    shifted.mouseY = in.mouseY + ScrollY();
+    UpdateWidgets(m_widgets, dt, shifted);
+
+    float mx = in.mouseX, my = in.mouseY + ScrollY();
+
+    // 编辑中：跟随滚动重定位，保证 EDIT 始终贴在原圆角格里
+    if (m_editingOn && m_edit && m_editField >= 0 && m_editField < 5) {
+        const auto& r = m_fieldRects[m_editField];
+        float s = (float)AppDpi() / 96.0f;
+        // 隐藏的输入捕获代理：始终保持 1x1，绝不覆盖设计边框；
+        // 可见文字与光标由 D3D 用软件字体绘制（PaintFieldEdit）。
+        SetWindowPos(m_edit, nullptr,
+                     (int)((r.left + 8.0f) * s), (int)((r.top - ScrollY() + 1.0f) * s),
+                     1, 1, SWP_NOZORDER);
+    }
+
+    // 悬停字段
+    m_hoverField = -1;
+    for (int i = 0; i < 5; ++i)
+        if (Hit(m_fieldRects[i], mx, my)) { m_hoverField = i; m_overInteractive = true; break; }
+
+    // 悬停收藏卡
+    m_hoverFav = -1;
+    for (size_t i = 0; i < m_favHits.size(); ++i)
+        if (Hit(m_favHits[i].r, mx, my)) { m_hoverFav = (int)i; m_overInteractive = true; break; }
+
+    if (!in.clicked) return;
+
+    // 字段点击
+    if (m_hoverField >= 0) {
+        int f = m_hoverField;
+        if (f == PF_GENDER)      { CycleGender(); return; }   // 性别仍点击循环
+        BeginEdit(f, m_fieldRects[f]);                         // 专业/学校/生日/简介：点进编辑
+        return;
+    }
+    if (m_editingOn) { CommitEdit(); }
+
+    // 收藏卡点击 → 跳到对应模块
+    if (m_hoverFav >= 0 && m_hoverFav < (int)m_favHits.size()) {
+        int idx = m_favHits[m_hoverFav].idx;
+        if (idx >= 0 && idx < (int)m_favs.size()) {
+            const auto& f = m_favs[idx];
+            if (f.kind == L"column") Go(L"roadmap");
+            else Go(L"video");
+        }
+        return;
+    }
+}
+
+// ============================================================
+//  绘制
+// ============================================================
+void ProfileView::Paint(Canvas& cv)
+{
+    const auto& pal = cv.Pal();
+    float availW = m_area.right - m_area.left;
+    float contentW = (std::min)(shape::kMaxWidth, availW - 72.0f);
+    float x0 = m_area.left + (availW - contentW) * 0.5f;
+    float s = ScrollY();
+
+    cv.PushClip(m_area);
+    cv.PushTransform(D2D1::Matrix3x2F::Translation(0.0f, -s));
+
+    PaintTitle(cv, x0, m_contentTop, contentW);
+    PaintHero(cv);
+    PaintStats(cv);
+    PaintFavs(cv);
+    PaintHistory(cv);
+
+    m_backBtn.Paint(cv);
+
+    cv.PopTransform();
+    cv.PopClip();
+
+    if (MaxScroll() > 1.0f) {
+        float trackTop = m_area.top + 8.0f;
+        float trackH = (m_area.bottom - m_area.top) - 16.0f;
+        float thumbH = (std::max)(40.0f, trackH * ((m_area.bottom - m_area.top) / m_contentHeight));
+        float pp = Clamp01(s / MaxScroll());
+        float ty = trackTop + (trackH - thumbH) * pp;
+        float bx = m_area.right - 6.0f;
+        cv.FillRect({ bx, trackTop, bx + 2.0f, trackTop + trackH }, WithAlpha(pal.ink300, 0.16f));
+        cv.FillRect({ bx, ty, bx + 2.0f, ty + thumbH }, WithAlpha(pal.seal, 0.55f));
+    }
+
+    if (m_toastT > 0.0f && !m_toast.empty()) {
+        float a = Clamp01(m_toastT / 0.5f);
+        TextStyle ts; ts.role = FontRole::Sans; ts.size = 12.5f;
+        ts.hAlign = HAlign::Center; ts.vAlign = VAlign::Middle;
+        float w = cv.MeasureWidth(m_toast, ts) + 40.0f;
+        D2D1_RECT_F r{ (m_area.left + m_area.right) * 0.5f - w * 0.5f, m_area.bottom - 68.0f,
+                       (m_area.left + m_area.right) * 0.5f + w * 0.5f, m_area.bottom - 30.0f };
+        cv.PushOpacity(a);
+        cv.FillRoundRect(r, shape::kEdge, WithAlpha(pal.ink900, 0.9f));
+        cv.Text(m_toast, r, ts, pal.paperHi);
+        cv.PopOpacity();
+    }
+}
+
+void ProfileView::PaintTitle(Canvas& cv, float x0, float y, float contentW)
+{
+    const auto& pal = cv.Pal();
+    TextStyle sec; sec.role = FontRole::Mono; sec.size = 10.5f;
+    sec.letterSpacing = 2.4f; sec.weight = DWRITE_FONT_WEIGHT_BOLD;
+    float ha = Clamp01(m_t / 0.5f);
+    cv.PushOpacity(ha);
+    cv.Text(L"SECTION · 个人档案 · 收藏与足迹", { x0, y, x0 + 460.0f, y + 16.0f }, sec, pal.ink300);
+    cv.PopOpacity();
+
+    TextStyle h1; h1.role = FontRole::Serif; h1.size = 38.0f;
+    h1.weight = DWRITE_FONT_WEIGHT_BLACK; h1.letterSpacing = 3.0f;
+    cv.CharsReveal(L"我 的", x0, y + 24.0f, h1, pal.ink900, m_t * 1.15f, 0.05f, 16.0f);
+
+    float da = Clamp01((m_t - 0.25f) / 0.6f);
+    if (da > 0.0f) {
+        TextStyle ds; ds.role = FontRole::Mono; ds.size = 11.0f; ds.letterSpacing = 1.6f;
+        ds.hAlign = HAlign::Right;
+        cv.PushOpacity(ease::OutCubic(da));
+        cv.Text(L"点击任一字段即可就地修改",
+                { x0 + contentW - 360.0f, y + 2.0f, x0 + contentW, y + 20.0f }, ds, pal.ink500);
+        cv.PopOpacity();
+    }
+    cv.PerforationH(x0, x0 + contentW, y + 78.0f, WithAlpha(pal.ruleStrong, 0.6f * ha));
+}
+
+void ProfileView::PaintHero(Canvas& cv)
+{
+    const auto& pal = cv.Pal();
+    float appear = Clamp01((m_t - 0.2f) / 0.55f);
+    if (appear <= 0.004f) return;
+    float e = ease::OutCubic(appear);
+    cv.PushTransform(D2D1::Matrix3x2F::Translation(0.0f, (1.0f - e) * 12.0f));
+    cv.PushOpacity(e);
+
+    auto& as = AccountStore::Instance();
+    std::wstring name = as.CurrentName();
+    std::wstring uid = as.UserId();
+    bool guest = as.IsGuest();
+
+    cv.PaperCard(m_heroRect, 0.35f, shape::kEdge);
+    cv.FillRect({ m_heroRect.left, m_heroRect.top, m_heroRect.left + 3.0f, m_heroRect.bottom },
+                WithAlpha(pal.seal, 0.85f));
+
+    // 头像：朱砂圆章 + 首字
+    float cx = (m_avatar.left + m_avatar.right) * 0.5f;
+    float cy = (m_avatar.top + m_avatar.bottom) * 0.5f;
+    float rr = (m_avatar.right - m_avatar.left) * 0.5f;
+    cv.FillCircle(cx, cy, rr, WithAlpha(pal.seal, pal.dark ? 0.26f : 0.14f));
+    cv.StrokeCircle(cx, cy, rr, WithAlpha(pal.seal, 0.8f), shape::kStroke);
+    cv.StrokeCircle(cx, cy, rr - 4.0f, WithAlpha(pal.seal, 0.35f), shape::kHair);
+    {
+        TextStyle av; av.role = FontRole::Serif; av.size = 34.0f;
+        av.weight = DWRITE_FONT_WEIGHT_BLACK;
+        av.hAlign = HAlign::Center; av.vAlign = VAlign::Middle;
+        cv.Text(name.empty() ? L"?" : name.substr(0, 1), m_avatar, av, pal.seal);
+    }
+
+    float infoL = m_avatar.right + 24.0f;
+    // 名号
+    TextStyle ns; ns.role = FontRole::Serif; ns.size = 25.0f;
+    ns.weight = DWRITE_FONT_WEIGHT_BOLD; ns.letterSpacing = 1.5f;
+    cv.Text(name, { infoL, m_heroRect.top + 24.0f, m_heroRect.right - 200.0f, m_heroRect.top + 58.0f },
+            ns, pal.ink900);
+
+    // UID + 角色
+    TextStyle us; us.role = FontRole::Mono; us.size = 11.0f; us.letterSpacing = 1.0f;
+    std::wstring role = guest ? L"访客（数据仅存本机）"
+                              : (as.IsDemoCurrent() ? L"演示账户" : L"注册账户");
+    std::wstring cloud = Cloud::Instance().LoggedIn() ? L"云端已登录" : L"云端未登录";
+    cv.Text(L"UID " + uid + L"   ·   " + role + L"   ·   " + cloud,
+            { infoL, m_heroRect.top + 62.0f, m_heroRect.right - 24.0f, m_heroRect.top + 82.0f },
+            us, pal.ink500);
+
+    // 简介字段格（与卡片同色 + 描边界定，编辑时 EDIT 无缝嵌入其中）
+    {
+        bool hov = (m_hoverField == PF_BIO);
+        bool editing = (m_editingOn && m_editField == PF_BIO);
+        cv.FillRoundRect(m_bioRect, shape::kEdge, pal.paperHi);
+        cv.StrokeRoundRect(m_bioRect, shape::kEdge,
+                           WithAlpha(editing ? pal.seal : (hov ? pal.seal : pal.rule),
+                                     editing ? 0.95f : (hov ? 0.7f : 0.45f)),
+                           editing ? shape::kStroke : shape::kHair);
+        TextStyle bs; bs.role = FontRole::Sans; bs.size = 12.5f; bs.vAlign = VAlign::Middle;
+        bool empty = m_profile.bio.empty();
+        std::wstring disp = editing ? lj::ReadEditBuffer(m_edit)
+                                    : (empty ? L"还没有简介 —— 点这里写一句关于自己的话" : m_profile.bio);
+        D2D1_COLOR_F col = editing ? pal.ink900 : (empty ? pal.ink300 : pal.ink700);
+        int caret = editing ? lj::EditCaretPos(m_edit) : -1;
+        lj::PaintFieldEdit(cv, { m_bioRect.left + 12.0f, m_bioRect.top,
+                                 m_bioRect.right - 12.0f, m_bioRect.bottom },
+                          bs, disp, col, caret, 0.0f);
+    }
+
+    // 资料四格
+    struct FDef { int f; const wchar_t* label; const wchar_t* hint; };
+    const FDef defs[4] = {
+        { PF_MAJOR,  L"专业", L"点击输入" },
+        { PF_SCHOOL, L"学校", L"点击输入" },
+        { PF_BIRTH,  L"生日", L"YYYY-MM-DD" },
+        { PF_GENDER, L"性别", L"点击切换" },
+    };
+    for (const auto& d : defs) {
+        const auto& r = m_fieldRects[d.f];
+        bool hov = (m_hoverField == d.f);
+        bool editing = (m_editingOn && m_editField == d.f);
+
+        cv.PaperCard(r, 0.0f, shape::kEdge);
+        cv.StrokeRoundRect(r, shape::kEdge,
+                           WithAlpha(editing || hov ? pal.seal : pal.rule,
+                                     editing ? 0.95f : (hov ? 0.7f : 0.4f)),
+                           editing ? shape::kStroke : shape::kHair);
+
+        TextStyle ls; ls.role = FontRole::Mono; ls.size = 10.0f; ls.letterSpacing = 1.4f;
+        cv.Text(d.label, { r.left + 12.0f, r.top + 9.0f, r.right - 12.0f, r.top + 24.0f },
+                ls, pal.ink300);
+
+        std::wstring val;
+        switch (d.f) {
+            case PF_MAJOR:  val = m_profile.major; break;
+            case PF_SCHOOL: val = m_profile.school; break;
+            case PF_BIRTH:  val = m_profile.birthday; break;
+            case PF_GENDER: val = m_profile.gender; break;
+        }
+        // 输入区：与卡片同色的圆角格；编辑时文字由 D3D 用软件字体绘制，
+        // 隐藏的 EDIT 仅作输入捕获代理，不再覆盖设计边框。
+        D2D1_RECT_F vr{ r.left + 8.0f, r.top + 26.0f, r.right - 8.0f, r.bottom - 8.0f };
+        cv.FillRoundRect(vr, 3.0f, pal.paperHi);
+        TextStyle vs; vs.role = FontRole::Sans; vs.size = 13.0f;
+        vs.weight = DWRITE_FONT_WEIGHT_SEMI_BOLD; vs.vAlign = VAlign::Middle;
+        bool empty = val.empty();
+        std::wstring disp = editing ? lj::ReadEditBuffer(m_edit) : (empty ? d.hint : val);
+        D2D1_COLOR_F col = editing ? pal.ink900 : (empty ? pal.ink300 : pal.ink900);
+        int caret = editing ? lj::EditCaretPos(m_edit) : -1;
+        int sa = -1, sb = -1;
+        if (editing) lj::EditSelRange(m_edit, sa, sb);
+        lj::PaintFieldEdit(cv, { vr.left + 4.0f, vr.top, vr.right - 4.0f, vr.bottom },
+                          vs, disp, col, caret, 0.0f, sa, sb);
+    }
+
+    cv.PopOpacity();
+    cv.PopTransform();
+}
+
+void ProfileView::PaintStats(Canvas& cv)
+{
+    const auto& pal = cv.Pal();
+    float appear = Clamp01((m_t - 0.34f) / 0.55f);
+    if (appear <= 0.004f) return;
+    float e = ease::OutCubic(appear);
+    cv.PushTransform(D2D1::Matrix3x2F::Translation(0.0f, (1.0f - e) * 12.0f));
+    cv.PushOpacity(e);
+
+    struct SDef { const wchar_t* label; std::wstring value; D2D1_COLOR_F c; };
+    wchar_t fbuf[32];
+    if (m_focusMin >= 60) swprintf_s(fbuf, L"%.1f h", (float)m_focusMin / 60.0f);
+    else swprintf_s(fbuf, L"%d min", m_focusMin);
+
+    SDef defs[4] = {
+        { L"收藏",     std::to_wstring(m_favs.size()),  pal.brass },
+        { L"浏览历史", std::to_wstring(m_hist.size()),  pal.jade  },
+        { L"我的专栏", std::to_wstring(m_colCount),     pal.seal  },
+        { L"累计专注", fbuf,                            pal.vermilion },
+    };
+    for (int i = 0; i < 4; ++i) {
+        const auto& r = m_statRects[i];
+        cv.PaperCard(r, 0.15f, shape::kEdge);
+        cv.FillRect({ r.left, r.top, r.left + 3.0f, r.bottom }, WithAlpha(defs[i].c, 0.8f));
+        TextStyle ls; ls.role = FontRole::Mono; ls.size = 10.0f; ls.letterSpacing = 1.4f;
+        cv.Text(defs[i].label, { r.left + 14.0f, r.top + 10.0f, r.right - 12.0f, r.top + 24.0f },
+                ls, pal.ink300);
+        TextStyle vs; vs.role = FontRole::Mono; vs.size = 21.0f;
+        vs.weight = DWRITE_FONT_WEIGHT_BOLD;
+        cv.Text(defs[i].value, { r.left + 14.0f, r.top + 28.0f, r.right - 12.0f, r.bottom - 8.0f },
+                vs, pal.ink900);
+    }
+
+    cv.PopOpacity();
+    cv.PopTransform();
+}
+
+void ProfileView::PaintFavs(Canvas& cv)
+{
+    const auto& pal = cv.Pal();
+    float appear = Clamp01((m_t - 0.44f) / 0.55f);
+    if (appear <= 0.004f) return;
+    float e = ease::OutCubic(appear);
+
+    float availW = m_area.right - m_area.left;
+    float contentW = (std::min)(shape::kMaxWidth, availW - 72.0f);
+    float x0 = m_area.left + (availW - contentW) * 0.5f;
+
+    cv.PushTransform(D2D1::Matrix3x2F::Translation(0.0f, (1.0f - e) * 12.0f));
+    cv.PushOpacity(e);
+
+    TextStyle sec; sec.role = FontRole::Mono; sec.size = 10.5f;
+    sec.letterSpacing = 2.4f; sec.weight = DWRITE_FONT_WEIGHT_BOLD;
+    cv.Text(L"SECTION · 我的收藏", { x0, m_favTitleY, x0 + 400.0f, m_favTitleY + 16.0f }, sec, pal.ink300);
+    TextStyle h2; h2.role = FontRole::Serif; h2.size = 20.0f;
+    h2.weight = DWRITE_FONT_WEIGHT_BOLD; h2.letterSpacing = 1.5f;
+    cv.Text(L"收藏（" + std::to_wstring(m_favs.size()) + L"）",
+            { x0, m_favTitleY + 18.0f, x0 + contentW, m_favTitleY + 42.0f }, h2, pal.ink900);
+
+    if (m_favHits.empty()) {
+        D2D1_RECT_F r{ x0, m_favTitleY + 44.0f, x0 + contentW, m_favTitleY + 44.0f + 48.0f };
+        cv.FillRoundRect(r, shape::kEdge, WithAlpha(pal.sealWash, pal.dark ? 0.16f : 0.22f));
+        TextStyle es; es.role = FontRole::Sans; es.size = 12.5f; es.vAlign = VAlign::Middle;
+        cv.Text(L"还没有收藏。去「专栏」点 ☆ 收藏，或在「视频 / 图片」里收藏喜欢的内容。",
+                { r.left + 18.0f, r.top, r.right - 18.0f, r.bottom }, es, pal.ink500);
+    } else {
+        for (size_t i = 0; i < m_favHits.size(); ++i) {
+            const auto& h = m_favHits[i];
+            if (h.idx < 0 || h.idx >= (int)m_favs.size()) continue;
+            const auto& f = m_favs[h.idx];
+            bool hov = (m_hoverFav == (int)i);
+            D2D1_COLOR_F kc = (f.kind == L"column") ? pal.seal
+                            : (f.kind == L"video")  ? pal.vermilion : pal.jade;
+
+            cv.PaperCard(h.r, hov ? 0.45f : 0.12f, shape::kEdge);
+            cv.StrokeRoundRect(h.r, shape::kEdge, WithAlpha(hov ? kc : pal.rule, hov ? 0.85f : 0.4f),
+                               hov ? shape::kStroke : shape::kHair);
+
+            D2D1_RECT_F kb{ h.r.left + 14.0f, h.r.top + 15.0f, h.r.left + 62.0f, h.r.bottom - 15.0f };
+            cv.FillRoundRect(kb, 3.0f, WithAlpha(kc, 0.16f));
+            cv.StrokeRoundRect(kb, 3.0f, WithAlpha(kc, 0.65f), shape::kHair);
+            TextStyle ks; ks.role = FontRole::Sans; ks.size = 11.0f;
+            ks.hAlign = HAlign::Center; ks.vAlign = VAlign::Middle;
+            cv.Text(KindLabel(f.kind), kb, ks, kc);
+
+            TextStyle ts; ts.role = FontRole::Sans; ts.size = 13.5f;
+            ts.weight = DWRITE_FONT_WEIGHT_SEMI_BOLD; ts.vAlign = VAlign::Middle;
+            cv.Text(f.title, { h.r.left + 76.0f, h.r.top, h.r.right - 250.0f, h.r.bottom }, ts, pal.ink900);
+
+            TextStyle ms; ms.role = FontRole::Mono; ms.size = 10.5f;
+            ms.hAlign = HAlign::Right; ms.vAlign = VAlign::Middle;
+            std::wstring meta = (f.author.empty() ? L"" : f.author + L"  ·  ") + PvFormatTs(f.ts);
+            cv.Text(meta, { h.r.right - 240.0f, h.r.top, h.r.right - 16.0f, h.r.bottom }, ms, pal.ink500);
+        }
+    }
+
+    cv.PopOpacity();
+    cv.PopTransform();
+}
+
+void ProfileView::PaintHistory(Canvas& cv)
+{
+    const auto& pal = cv.Pal();
+    float appear = Clamp01((m_t - 0.54f) / 0.55f);
+    if (appear <= 0.004f) return;
+    float e = ease::OutCubic(appear);
+
+    float availW = m_area.right - m_area.left;
+    float contentW = (std::min)(shape::kMaxWidth, availW - 72.0f);
+    float x0 = m_area.left + (availW - contentW) * 0.5f;
+
+    cv.PushTransform(D2D1::Matrix3x2F::Translation(0.0f, (1.0f - e) * 12.0f));
+    cv.PushOpacity(e);
+
+    TextStyle sec; sec.role = FontRole::Mono; sec.size = 10.5f;
+    sec.letterSpacing = 2.4f; sec.weight = DWRITE_FONT_WEIGHT_BOLD;
+    cv.Text(L"SECTION · 浏览足迹", { x0, m_histTitleY, x0 + 400.0f, m_histTitleY + 16.0f }, sec, pal.ink300);
+    TextStyle h2; h2.role = FontRole::Serif; h2.size = 20.0f;
+    h2.weight = DWRITE_FONT_WEIGHT_BOLD; h2.letterSpacing = 1.5f;
+    cv.Text(L"历史（" + std::to_wstring(m_hist.size()) + L"）",
+            { x0, m_histTitleY + 18.0f, x0 + contentW, m_histTitleY + 42.0f }, h2, pal.ink900);
+
+    if (m_histRects.empty()) {
+        D2D1_RECT_F r{ x0, m_histTitleY + 44.0f, x0 + contentW, m_histTitleY + 44.0f + 48.0f };
+        cv.FillRoundRect(r, shape::kEdge, WithAlpha(pal.sealWash, pal.dark ? 0.16f : 0.22f));
+        TextStyle es; es.role = FontRole::Sans; es.size = 12.5f; es.vAlign = VAlign::Middle;
+        cv.Text(L"还没有浏览记录。读过的专栏、播放过的视频与音频会自动记在这里。",
+                { r.left + 18.0f, r.top, r.right - 18.0f, r.bottom }, es, pal.ink500);
+    } else {
+        for (size_t i = 0; i < m_histRects.size() && i < m_hist.size(); ++i) {
+            const auto& r = m_histRects[i];
+            const auto& hi = m_hist[i];
+            D2D1_COLOR_F kc = (hi.kind == L"column") ? pal.seal
+                            : (hi.kind == L"video")  ? pal.vermilion
+                            : (hi.kind == L"audio")  ? pal.brass : pal.jade;
+
+            cv.FillRoundRect(r, shape::kEdgeSoft, WithAlpha(pal.sealWash, pal.dark ? 0.14f : 0.20f));
+            cv.FillRect({ r.left, r.top, r.left + 2.5f, r.bottom }, WithAlpha(kc, 0.75f));
+
+            TextStyle ks; ks.role = FontRole::Mono; ks.size = 10.0f; ks.vAlign = VAlign::Middle;
+            cv.Text(KindLabel(hi.kind), { r.left + 14.0f, r.top, r.left + 60.0f, r.bottom }, ks, kc);
+
+            TextStyle ts; ts.role = FontRole::Sans; ts.size = 12.5f; ts.vAlign = VAlign::Middle;
+            cv.Text(hi.title, { r.left + 66.0f, r.top, r.right - 170.0f, r.bottom }, ts, pal.ink700);
+
+            TextStyle ms; ms.role = FontRole::Mono; ms.size = 10.0f;
+            ms.hAlign = HAlign::Right; ms.vAlign = VAlign::Middle;
+            cv.Text(PvFormatTs(hi.ts), { r.right - 160.0f, r.top, r.right - 14.0f, r.bottom }, ms, pal.ink300);
+        }
+    }
+
+    cv.PopOpacity();
+    cv.PopTransform();
+}
+
+} // namespace lj

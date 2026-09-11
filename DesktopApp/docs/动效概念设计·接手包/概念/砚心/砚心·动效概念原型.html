@@ -1,0 +1,405 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+<title>砚心 · 芙洛理知识库动效概念原型</title>
+<style>
+  :root{
+    --paper:#f3ecdc; --paper2:#ece2cd; --ink:#23232b; --ink2:#6c6c76;
+    --jade:#13857a; --seal:#cf2a1f; --gold:#b6882f; --line:#d9cdb2;
+  }
+  *{ box-sizing:border-box; margin:0; padding:0; }
+  html,body{ height:100%; overflow:hidden; background:var(--paper);
+    font-family:"PingFang SC","Microsoft YaHei","Noto Sans CJK SC",system-ui,sans-serif;
+    color:var(--ink); -webkit-font-smoothing:antialiased; }
+  /* WebGL ink-wash background (guarded; hidden on failure) */
+  #bg{ position:fixed; inset:0; width:100%; height:100%; z-index:0; display:none; }
+  /* paper grain fallback */
+  body::before{ content:""; position:fixed; inset:0; z-index:0;
+    background:
+      radial-gradient(1200px 800px at 70% -10%, rgba(255,255,255,.45), transparent 60%),
+      radial-gradient(900px 700px at 10% 110%, rgba(19,133,122,.06), transparent 60%),
+      linear-gradient(180deg,var(--paper),var(--paper2)); }
+  #app{ position:relative; z-index:1; height:100%; display:flex; flex-direction:column; }
+  .topbar{ height:56px; flex:0 0 56px; display:flex; align-items:center; gap:22px;
+    padding:0 22px; border-bottom:1px solid var(--line);
+    background:linear-gradient(180deg,rgba(255,255,255,.5),rgba(255,255,255,0)); }
+  .brand{ font-weight:700; letter-spacing:2px; font-size:16px; }
+  .brand b{ color:var(--jade); }
+  .tabs{ display:flex; gap:6px; }
+  .tab{ font-size:14px; padding:7px 14px; border-radius:9px; cursor:pointer; color:var(--ink2);
+    transition:color .25s, background .25s; user-select:none; }
+  .tab:hover{ color:var(--ink); }
+  .tab.on{ color:#fff; background:var(--ink); }
+  .spacer{ flex:1; }
+  .focusbtn{ font-size:13px; padding:7px 14px; border-radius:9px; cursor:pointer; user-select:none;
+    border:1px solid var(--line); color:var(--ink2); background:rgba(255,255,255,.4);
+    transition:all .25s; }
+  .focusbtn.on{ color:#fff; background:var(--jade); border-color:var(--jade); }
+  .avatar{ width:30px; height:30px; border-radius:50%; background:var(--seal); color:#fff;
+    display:flex; align-items:center; justify-content:center; font-size:13px; }
+  #scene{ flex:1; width:100%; display:block; }
+  .hud{ position:fixed; left:18px; bottom:16px; z-index:2; font-size:12px; color:var(--ink2);
+    line-height:1.7; pointer-events:none; max-width:46ch; }
+  .hud b{ color:var(--ink); font-weight:600; }
+  .hud .k{ display:inline-block; padding:1px 7px; border:1px solid var(--line); border-radius:6px;
+    background:rgba(255,255,255,.5); color:var(--ink); font-size:11px; margin:0 1px; }
+  .info{ position:fixed; right:16px; top:68px; z-index:3; width:280px; padding:14px 16px;
+    background:rgba(255,255,255,.72); border:1px solid var(--line); border-radius:12px;
+    font-size:12px; color:var(--ink2); line-height:1.7; backdrop-filter:blur(6px); }
+  .info h4{ color:var(--ink); font-size:13px; margin-bottom:6px; letter-spacing:.5px; }
+  .info.close{ display:none; }
+  .info .x{ position:absolute; right:10px; top:8px; cursor:pointer; color:var(--ink2); }
+  .err{ position:fixed; left:50%; top:14px; transform:translateX(-50%); z-index:9;
+    background:#b3261e; color:#fff; padding:8px 14px; border-radius:8px; font-size:12px; display:none; }
+</style>
+</head>
+<body>
+<canvas id="bg"></canvas>
+<div id="app">
+  <div class="topbar">
+    <div class="brand">芙洛理 <b>·</b> 知识库</div>
+    <div class="tabs" id="tabs">
+      <div class="tab on" data-p="kb">知识库</div>
+      <div class="tab" data-p="exam">练考</div>
+      <div class="tab" data-p="review">复盘</div>
+    </div>
+    <div class="spacer"></div>
+    <div class="focusbtn" id="focusBtn">专注模式</div>
+    <div class="avatar">绿</div>
+  </div>
+  <canvas id="scene"></canvas>
+</div>
+<div class="hud">
+  <b>砚心 · 动效原型</b>（非游戏，纯动效设计）<br>
+  滚轮 / 拖拽 = 惯性滚动，卡片<b>墨晕入场</b> ·
+  悬停 = 磁吸微抬 + <b>生成式连线</b> ·
+  <span class="k">专注</span> 让动效沉降 · 点标签看<b>编排式过渡</b>
+</div>
+<div class="info" id="info">
+  <span class="x" id="infoX">×</span>
+  <h4>这是什么</h4>
+  落点：芙洛理「知识库」真实界面。没有游戏机制，<b>所有动效都由你的操作驱动</b>：滚动产生惯性+墨晕入场；悬停产生磁吸与连线；切换标签触发整组错位重排。背景墨晕随你的滚动速度起伏、停手即沉降——真实动力学但确定可控。
+</div>
+<div class="err" id="err"></div>
+
+<script>
+(function(){
+  "use strict";
+  const errBox = document.getElementById('err');
+  function fail(msg){ errBox.textContent = msg; errBox.style.display='block'; }
+
+  // ---------- WebGL ink-wash background (velocity-driven, damped, guarded) ----------
+  let gl=null, bgProg=null, bgVel=0;
+  (function initBG(){
+    try{
+      const c = document.getElementById('bg');
+      const ctx = c.getContext('webgl') || c.getContext('experimental-webgl');
+      if(!ctx) return; // fallback to CSS gradient (no black screen)
+      gl = ctx;
+      const vs = "attribute vec2 p; void main(){ gl_Position=vec4(p,0.0,1.0); }";
+      const fs = [
+        "precision highp float;",
+        "uniform vec2 u_res; uniform float u_time; uniform float u_vel; uniform vec2 u_mouse;",
+        "float hash(vec2 p){ return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453); }",
+        "float noise(vec2 p){ vec2 i=floor(p),f=fract(p); f=f*f*(3.0-2.0*f);",
+        "  float a=hash(i),b=hash(i+vec2(1.0,0.0)),c=hash(i+vec2(0.0,1.0)),d=hash(i+vec2(1.0,1.0));",
+        "  return mix(mix(a,b,f.x),mix(c,d,f.x),f.y); }",
+        "void main(){",
+        "  vec2 uv=gl_FragCoord.xy/u_res.xy;",
+        "  vec2 p=uv*vec2(u_res.x/u_res.y,1.0)*3.0 + vec2(u_time*0.015,-u_time*0.010);",
+        "  float n = noise(p)*0.6 + noise(p*2.4+7.3)*0.4;",
+        "  float stir = 0.05 + abs(u_vel)*0.45;",
+        "  float wash = clamp(n*stir, 0.0, 0.4);",
+        "  vec3 paper = vec3(0.953,0.925,0.863);",
+        "  vec3 ink = vec3(0.10,0.14,0.16);",
+        "  vec3 col = mix(paper, ink, wash*0.42);",
+        "  float d = distance(uv, u_mouse);",
+        "  col += vec3(0.0,0.16,0.14)*smoothstep(0.35,0.0,d)*0.05;",
+        "  gl_FragColor = vec4(col,1.0);",
+        "}"
+      ].join("\n");
+      function sh(type,src){ const s=gl.createShader(type); gl.shaderSource(s,src); gl.compileShader(s);
+        if(!gl.getShaderParameter(s,gl.COMPILE_STATUS)){ throw new Error(gl.getShaderInfoLog(s)); } return s; }
+      const prog = gl.createProgram();
+      gl.attachShader(prog, sh(gl.VERTEX_SHADER, vs));
+      gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, fs));
+      gl.linkProgram(prog);
+      if(!gl.getProgramParameter(prog,gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
+      bgProg = prog;
+      const buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 3,-1, -1,3]), gl.STATIC_DRAW);
+      gl.useProgram(prog);
+      const loc = gl.getAttribLocation(prog,"p"); gl.enableVertexAttribArray(loc);
+      gl.vertexAttribPointer(loc,2,gl.FLOAT,false,0,0);
+      gl.canvas.style.display='block';
+      window.addEventListener('resize', resizeBG);
+      resizeBG();
+    }catch(e){ gl=null; /* keep CSS gradient */ }
+    function resizeBG(){ if(!gl) return; gl.canvas.width=innerWidth; gl.canvas.height=innerHeight; }
+  })();
+
+  // ---------- Canvas2D scene ----------
+  const scene = document.getElementById('scene');
+  const ctx = scene.getContext('2d');
+  let DPR = Math.min(2, window.devicePixelRatio||1);
+  let W=0,H=0, topH=56;
+  function resize(){
+    DPR = Math.min(2, window.devicePixelRatio||1);
+    W = scene.clientWidth; H = scene.clientHeight;
+    scene.width = Math.floor(W*DPR); scene.height = Math.floor(H*DPR);
+    ctx.setTransform(DPR,0,0,DPR,0,0);
+  }
+  window.addEventListener('resize', resize);
+
+  // palette
+  const C = {
+    jade:'#13857a', seal:'#cf2a1f', gold:'#b6882f', ink:'#3a3a44', ink2:'#6c6c76',
+    card:'rgba(252,250,244,0.97)', line:'#d9cdb2', paperCardEdge:'rgba(40,40,50,0.10)'
+  };
+
+  // knowledge data (real study context)
+  const RAW = [
+    {t:'言语理解', s:'行测 · 逻辑填空/片段阅读', g:0, m:0.82},
+    {t:'判断推理', s:'行测 · 图推/逻辑/定义', g:0, m:0.71},
+    {t:'资料分析', s:'行测 · 速算/比重', g:0, m:0.88},
+    {t:'数量关系', s:'行测 · 行程/排列组合', g:0, m:0.55},
+    {t:'归纳概括', s:'申论 · 要点提炼', g:1, m:0.76},
+    {t:'对策建议', s:'申论 · 可行性分析', g:1, m:0.69},
+    {t:'公文写作', s:'申论 · 格式/用语', g:1, m:0.63},
+    {t:'二十大报告', s:'时政 · 核心论断', g:2, m:0.91},
+    {t:'2026一号文件', s:'时政 · 乡村振兴', g:2, m:0.74},
+    {t:'法律基础', s:'常识 · 宪法/民法', g:3, m:0.80},
+    {t:'经济常识', s:'常识 · 宏观/微观', g:3, m:0.66},
+    {t:'薄弱点复盘', s:'跨科 · 高频失分', g:4, m:0.47}
+  ];
+  const GROUP_COL = ['#13857a','#cf2a1f','#b6882f','#5a5a66','#7a6cc0'];
+  // related = same group (excluding self); 复盘(4) links to 言语(0) + 归纳(4?)? link to 0 and 4
+  const REL = RAW.map((c,i)=>{
+    if(c.g===4) return [0,4];
+    const out=[]; for(let j=0;j<RAW.length;j++){ if(j!==i && RAW[j].g===c.g) out.push(j); } return out;
+  });
+
+  const cards = RAW.map((d,i)=>({
+    i, title:d.t, sub:d.s, group:d.g, mastery:d.m,
+    accent: GROUP_COL[d.g],
+    lift:0, scale:1, reveal:0, hovered:false,
+    thread: REL[i].map(()=>0),
+    enterAt:0, enterDelay:0
+  }));
+
+  // layout
+  const PAD = 40, CARD_W = 360, CARD_H = 92, GAP = 18;
+  let rowH = CARD_H + GAP;
+  function cardX(){ return PAD; }
+  function cardBaseY(i){ return i*rowH + 24; }
+
+  // scroll state (inertia, controlled)
+  let scrollY=0, scrollV=0;
+  function maxScroll(){ return Math.max(0, cards.length*rowH + 24 - H + 40); }
+
+  // interaction state
+  let mouseX=-1, mouseY=-1, scrollVelNorm=0, focusOn=false, hoverIdx=-1;
+  let page='kb', transitionStart=0;
+
+  // input
+  scene.addEventListener('wheel', (e)=>{
+    e.preventDefault();
+    scrollV += (focusOn?0.22:0.34) * e.deltaY;
+    scrollV = Math.max(-70, Math.min(70, scrollV));
+  }, {passive:false});
+
+  let dragging=false, dragLast=0;
+  scene.addEventListener('pointerdown',(e)=>{ dragging=true; dragLast=e.clientY; scene.setPointerCapture(e.pointerId); });
+  scene.addEventListener('pointerup',(e)=>{ dragging=false; });
+  scene.addEventListener('pointermove',(e)=>{
+    const r = scene.getBoundingClientRect();
+    mouseX = e.clientX - r.left; mouseY = e.clientY - r.top;
+    if(dragging){ const dy = e.clientY - dragLast; dragLast = e.clientY; scrollV += -dy*0.6; scrollV=Math.max(-70,Math.min(70,scrollV)); }
+  });
+  scene.addEventListener('pointerleave',()=>{ mouseX=-1; mouseY=-1; });
+
+  // top bar
+  document.getElementById('tabs').addEventListener('click',(e)=>{
+    const t = e.target.closest('.tab'); if(!t) return;
+    document.querySelectorAll('.tab').forEach(x=>x.classList.remove('on'));
+    t.classList.add('on'); page = t.dataset.p;
+    triggerRelayout();
+  });
+  const focusBtn = document.getElementById('focusBtn');
+  focusBtn.addEventListener('click',()=>{
+    focusOn=!focusOn; focusBtn.classList.toggle('on',focusOn);
+  });
+  document.getElementById('infoX').addEventListener('click',()=>{
+    document.getElementById('info').classList.add('close');
+  });
+
+  function triggerRelayout(){
+    const now = performance.now();
+    transitionStart = now;
+    cards.forEach((c,i)=>{ c.reveal=0; c.enterAt=now; c.enterDelay=i*42; c.lift=0; c.scale=0.92; });
+  }
+
+  // ---------- update ----------
+  function update(now){
+    // scroll inertia + bounds
+    scrollV *= focusOn?0.80:0.90;
+    scrollY += scrollV;
+    const ms = maxScroll();
+    if(scrollY<0){ scrollY += (0-scrollY)*0.2; scrollV*=0.4; }
+    if(scrollY>ms){ scrollY += (ms-scrollY)*0.2; scrollV*=0.4; }
+    scrollVelNorm = Math.max(-1, Math.min(1, scrollV/40));
+
+    // hover detection
+    hoverIdx = -1;
+    if(mouseX>=0){
+      for(let i=0;i<cards.length;i++){
+        const y = cardBaseY(i) - scrollY;
+        if(mouseX>=cardX() && mouseX<=cardX()+CARD_W && mouseY>=y && mouseY<=y+CARD_H){ hoverIdx=i; break; }
+      }
+    }
+
+    cards.forEach((c,i)=>{
+      const y = cardBaseY(i) - scrollY;
+      const visible = (y < H+60 && y+CARD_H > -60);
+      let targetReveal = visible?1:0.0;
+      // entrance gate (tab switch stagger)
+      if(now < c.enterAt + c.enterDelay) targetReveal = 0;
+      c.reveal += (targetReveal - c.reveal) * 0.08;
+
+      const hov = (i===hoverIdx);
+      c.lift += ((hov? -14 : 0) - c.lift) * 0.18;
+      c.scale += ((hov? 1.035 : 1) - c.scale) * 0.18;
+      c.hovered = hov;
+
+      // threads to related (only when hovered)
+      REL[i].forEach((ri,k)=>{
+        const tg = hov?1:0;
+        c.thread[k] += (tg - c.thread[k]) * 0.14;
+      });
+    });
+  }
+
+  // ---------- draw ----------
+  function rr(x,y,w,h,r){ ctx.beginPath();
+    ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r);
+    ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath(); }
+
+  function drawCard(c){
+    const x = cardX(), y = cardBaseY(c.i) - scrollY;
+    const w=CARD_W, h=CARD_H;
+    ctx.save();
+    ctx.translate(x+w/2, y+h/2 + c.lift);
+    ctx.scale(c.scale, c.scale);
+    ctx.globalAlpha = Math.max(0, Math.min(1, c.reveal));
+
+    // shadow
+    ctx.shadowColor='rgba(40,40,50,0.12)'; ctx.shadowBlur=20*c.reveal; ctx.shadowOffsetY=9*c.reveal;
+    rr(-w/2,-h/2,w,h,14); ctx.fillStyle=C.card; ctx.fill();
+    ctx.shadowColor='transparent';
+
+    // wet ink edge while revealing
+    if(c.reveal<0.985){ ctx.strokeStyle='rgba(30,30,42,'+((1-c.reveal)*0.22)+')'; ctx.lineWidth=2;
+      rr(-w/2,-h/2,w,h,14); ctx.stroke(); }
+
+    // accent bar
+    ctx.fillStyle = focusOn? mixHex(c.accent,'#9a9a9a',0.35) : c.accent;
+    rr(-w/2,-h/2,5,h,2); ctx.fill();
+
+    // title + sub
+    ctx.textAlign='left'; ctx.textBaseline='alphabetic';
+    ctx.fillStyle = focusOn? '#3a3a44' : '#23232b';
+    ctx.font='600 17px "PingFang SC","Microsoft YaHei",sans-serif';
+    ctx.fillText(c.title, -w/2+24, -h/2+34);
+    ctx.fillStyle = C.ink2; ctx.font='400 12.5px "PingFang SC",sans-serif';
+    ctx.fillText(c.sub, -w/2+24, -h/2+56);
+
+    // mastery bar
+    const bw=w-48, bx=-w/2+24, by=h/2-22;
+    ctx.fillStyle='rgba(40,40,50,0.08)'; rr(bx,by,bw,6,3); ctx.fill();
+    ctx.fillStyle = c.accent; rr(bx,by,bw*Math.max(0.04,c.mastery),6,3); ctx.fill();
+    ctx.fillStyle=C.ink2; ctx.font='400 11px "PingFang SC",sans-serif'; ctx.textAlign='right';
+    ctx.fillText('掌握 '+Math.round(c.mastery*100)+'%', w/2-24, by-6);
+    ctx.textAlign='left';
+    ctx.restore();
+  }
+
+  function drawThreadsFrom(hov){
+    const c = cards[hov];
+    const x0 = cardX()+CARD_W/2, y0 = cardBaseY(hov)-scrollY + CARD_H/2 + c.lift;
+    REL[hov].forEach((ri,k)=>{
+      const t = c.thread[k]; if(t<=0.01) return;
+      const x1 = cardX()+CARD_W/2, y1 = cardBaseY(ri)-scrollY + CARD_H/2;
+      const mx = (x0+x1)/2 + (hov%2? 60 : -60);
+      ctx.save();
+      ctx.globalAlpha = t*0.9;
+      ctx.strokeStyle = c.accent; ctx.lineWidth = 1.4;
+      ctx.setLineDash([5,6]); ctx.lineDashOffset = -(performance.now()*0.04)%(11);
+      ctx.beginPath(); ctx.moveTo(x0,y0); ctx.quadraticCurveTo(mx,(y0+y1)/2,x1,y1); ctx.stroke();
+      ctx.setLineDash([]);
+      // node dot at target
+      ctx.fillStyle=c.accent; ctx.beginPath(); ctx.arc(x1,y1,3.2,0,Math.PI*2); ctx.fill();
+      ctx.restore();
+    });
+  }
+
+  function mixHex(a,b,t){
+    const pa=hx(a), pb=hx(b);
+    const r=Math.round(pa[0]+(pb[0]-pa[0])*t), g=Math.round(pa[1]+(pb[1]-pa[1])*t), bl=Math.round(pa[2]+(pb[2]-pa[2])*t);
+    return 'rgb('+r+','+g+','+bl+')';
+  }
+  function hx(h){ h=h.replace('#',''); return [parseInt(h.substr(0,2),16),parseInt(h.substr(2,2),16),parseInt(h.substr(4,2),16)]; }
+
+  function drawFocusVignette(){
+    if(!focusOn) return;
+    const g = ctx.createRadialGradient(W/2,H/2, H*0.25, W/2,H/2, H*0.75);
+    g.addColorStop(0,'rgba(0,0,0,0)'); g.addColorStop(1,'rgba(20,30,28,0.16)');
+    ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+  }
+
+  function frame(now){
+    // WebGL bg
+    if(gl && bgProg){
+      try{
+        bgVel += (scrollVelNorm - bgVel)*0.1; // damped, controlled
+        gl.viewport(0,0,gl.canvas.width,gl.canvas.height);
+        gl.useProgram(bgProg);
+        gl.uniform2f(gl.getUniformLocation(bgProg,'u_res'), gl.canvas.width, gl.canvas.height);
+        gl.uniform1f(gl.getUniformLocation(bgProg,'u_time'), now*0.001);
+        gl.uniform1f(gl.getUniformLocation(bgProg,'u_vel'), focusOn? bgVel*0.4 : bgVel);
+        const mx = mouseX<0?0.5:mouseX/W, my = mouseY<0?0.5:1-(mouseY/H);
+        gl.uniform2f(gl.getUniformLocation(bgProg,'u_mouse'), mx, my);
+        gl.drawArrays(gl.TRIANGLES,0,3);
+      }catch(e){ gl=null; }
+    }
+
+    update(now);
+    ctx.clearRect(0,0,W,H);
+    // parallax faint guideline
+    ctx.save(); ctx.globalAlpha=0.5;
+    ctx.strokeStyle='rgba(120,120,130,0.10)'; ctx.lineWidth=1;
+    const gx = cardX()+CARD_W+40;
+    ctx.beginPath(); ctx.moveTo(gx, 20 - scrollY*0.15); ctx.lineTo(gx, H); ctx.stroke();
+    ctx.restore();
+
+    // cards (sorted so hovered draws last/on top)
+    let hov=-1;
+    cards.forEach(c=>{ if(c.hovered) hov=c.i; else drawCard(c); });
+    if(hov>=0){ drawThreadsFrom(hov); drawCard(cards[hov]); }
+
+    drawFocusVignette();
+    requestAnimationFrame(frame);
+  }
+
+  resize();
+  // initial entrance
+  cards.forEach((c,i)=>{ c.enterAt=performance.now(); c.enterDelay=i*42; c.scale=0.92; });
+  requestAnimationFrame(frame);
+
+  // expose for validation
+  window.__INKWELL__ = { cards, bg:()=>!!gl };
+})();
+</script>
+</body>
+</html>

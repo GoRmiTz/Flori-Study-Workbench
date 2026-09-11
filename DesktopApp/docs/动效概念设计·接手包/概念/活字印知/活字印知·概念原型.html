@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+<title>芙洛理 · 活字印知 概念原型</title>
+<style>
+  html,body{margin:0;height:100%;overflow:hidden;background:#1c140d;
+    font-family:"Songti SC","STSong","SimSun",serif;color:#e9ddc8;}
+  #wrap{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;}
+  #c{display:block;box-shadow:0 30px 80px rgba(0,0,0,.6);border-radius:14px;cursor:pointer;}
+  #quiz{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);
+    width:420px;max-width:88vw;background:linear-gradient(180deg,#f3ead7,#e7d9bd);
+    color:#3a2a18;border-radius:14px;padding:22px 24px 20px;display:none;z-index:5;
+    box-shadow:0 24px 60px rgba(0,0,0,.55);border:1px solid #c9b48c;}
+  #quiz h3{margin:0 0 6px;font-size:15px;color:#8a2c1d;letter-spacing:.06em;}
+  #quiz p{margin:0 0 16px;font-size:18px;line-height:1.6;color:#2c2014;}
+  #quiz .row{display:flex;gap:12px;}
+  #quiz button{flex:1;border:0;padding:11px 0;border-radius:9px;font:600 15px/1 inherit;
+    cursor:pointer;transition:transform .08s ease, filter .15s ease;}
+  #quiz button:active{transform:translateY(1px) scale(.99);}
+  #ok{background:#2f7d5b;color:#fff;}
+  #no{background:#b23a26;color:#fff;}
+  #ok:hover,#no:hover{filter:brightness(1.08);}
+  #hint{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);z-index:4;
+    font:13px/1.7 "Songti SC","SimSun",serif;color:#b7a888;letter-spacing:.03em;
+    text-align:center;text-shadow:0 1px 2px rgba(0,0,0,.5);pointer-events:none;}
+  #hint b{color:#d8b25a;}
+  #bar{position:fixed;left:18px;top:14px;z-index:4;font:12px/1.5 ui-monospace,Menlo,monospace;color:#9c8c70;}
+  #bar .t{color:#d8b25a;}
+</style>
+</head>
+<body>
+<div id="wrap"><canvas id="c"></canvas></div>
+<div id="quiz">
+  <h3>抽测 · 回忆考点</h3>
+  <p id="qtext">请回忆该考点的要点。</p>
+  <div class="row">
+    <button id="ok">答出 ✓</button>
+    <button id="no">还不会 ✗</button>
+  </div>
+</div>
+<div id="hint">点击松散的活字 → 抽测回忆 → <b>答出则压印锁定</b>，答错则字块轻颤归位 &nbsp;·&nbsp; 「随机抽测」自动挑一块 &nbsp;·&nbsp; 「重排字盘」可解锁重练</div>
+<div id="bar"></div>
+<script>
+(function(){
+  "use strict";
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d');
+  const DPR = Math.min(window.devicePixelRatio||1, 2);
+  const W = 980, H = 620;
+  canvas.style.width = W+'px'; canvas.style.height = H+'px';
+  canvas.width = W*DPR; canvas.height = H*DPR;
+  ctx.scale(DPR, DPR);
+
+  // ---- 调色（与芙洛理既有 墨/朱砂/青 身份一致，非 SaaS 蓝白）----
+  const C = {
+    walnut1:'#2a1d12', walnut2:'#1a110a', plateEdge:'#0d0805',
+    blockTop:'#f1e6cf', blockBot:'#cdb892', blockSide:'#a98f64',
+    ink:'#241a10', jade:'#2f9d8b', jadeDim:'#1f6e62',
+    seal:'#b23a26', sealDim:'#7d2417', paper:'#efe3c9',
+    chrome:'#e9ddc8', chromeDim:'#9c8c70', tabOn:'#d8b25a'
+  };
+
+  // ---- 真实考公考点（2 字活字）----
+  const POINTS = [
+    {t:'行测',q:'“行政职业能力测验”包含哪些模块？'},
+    {t:'申论',q:'申论写作通常要求哪几种能力？'},
+    {t:'言语',q:'言语理解与表达考查什么？'},
+    {t:'资料',q:'资料分析常用哪类计算技巧？'},
+    {t:'判断',q:'判断推理含哪几种题型？'},
+    {t:'常识',q:'常识判断覆盖哪些知识领域？'},
+    {t:'时政',q:'近期时政热点一般如何考查？'},
+    {t:'数量',q:'数量关系核心是什么？'},
+    {t:'图形',q:'图形推理看哪些规律？'},
+    {t:'逻辑',q:'逻辑判断含哪些推理？'},
+    {t:'类比',q:'类比推理比较什么关系？'},
+    {t:'定义',q:'定义判断的解题步骤？'},
+    {t:'语句',q:'语句表达含排序与什么？'},
+    {t:'篇章',q:'篇章阅读如何抓主旨？'},
+    {t:'党史',q:'中共党史有哪些关键节点？'},
+    {t:'法律',q:'行测法律常考哪几部？'},
+    {t:'经济',q:'宏观经济常考哪些指标？'},
+    {t:'管理',q:'公共管理常考什么？'},
+    {t:'公文',q:'公文格式含哪些要素？'},
+    {t:'写作',q:'大作文如何立论结构？'}
+  ];
+
+  // ---- 字盘布局（落在「知识库 / 复盘」的考点卡区）----
+  const COLS=5, ROWS=4, MX=44, MY=96, GAP=18;
+  const trayW = W-2*MX, trayH = H-MY-26;
+  const cellW = (trayW - (COLS-1)*GAP)/COLS;
+  const cellH = (trayH - (ROWS-1)*GAP)/ROWS;
+  const bw = Math.min(cellW, cellH)*0.82, bh = bw;
+
+  const blocks = POINTS.map((p,i)=>{
+    const c = i%COLS, r = (i/COLS)|0;
+    const cx = MX + c*(cellW+GAP) + cellW/2;
+    const cy = MY + r*(cellH+GAP) + cellH/2;
+    return {
+      ...p, i, cx, cy,                 // 印版目标中心（字块落座处）
+      state:'loose',                  // loose | selected | locking | locked
+      phase: Math.random()*Math.PI*2,
+      // 弹簧状态（确定可控）
+      press:0, pressV:0,              // 0=浮起, 1=压印落座
+      shake:0, shakeV:0,              // 答错轻颤
+      seal:0,                         // 朱砂印透明度/缩放
+      hover:false, idle:0
+    };
+  });
+
+  // ---- 印版木纹（离屏一次绘制）----
+  const plate = document.createElement('canvas');
+  plate.width=W*DPR; plate.height=H*DPR;
+  const pc = plate.getContext('2d'); pc.scale(DPR,DPR);
+  (function paintPlate(){
+    const g = pc.createLinearGradient(0,MY,0,H-26);
+    g.addColorStop(0,'#33241a'); g.addColorStop(1,'#1c130c');
+    pc.fillStyle=g; roundRect(pc,MX,MY,trayW,trayH,16); pc.fill();
+    // 木纹噪声
+    pc.save();
+    roundRect(pc,MX,MY,trayW,trayH,16); pc.clip();
+    for(let k=0;k<1400;k++){
+      const x=MX+Math.random()*trayW, y=MY+Math.random()*trayH;
+      pc.fillStyle='rgba('+(20+Math.random()*30|0)+','+(12+Math.random()*18|0)+',8,'+(Math.random()*0.05)+')';
+      pc.fillRect(x,y,Math.random()*40+10,1);
+    }
+    pc.restore();
+    pc.strokeStyle='rgba(0,0,0,.5)'; pc.lineWidth=2; roundRect(pc,MX,MY,trayW,trayH,16); pc.stroke();
+    // 凹格（每个字块落座的印坑）
+    blocks.forEach(b=>{
+      pc.fillStyle='rgba(0,0,0,.28)';
+      roundRect(pc, b.cx-bw/2-4, b.cy-bh/2-4, bw+8, bh+8, 10); pc.fill();
+      pc.strokeStyle='rgba(255,235,200,.05)'; pc.lineWidth=1;
+      roundRect(pc, b.cx-bw/2-4, b.cy-bh/2-3, bw+8, bh+8, 10); pc.stroke();
+    });
+  })();
+
+  // ---- 顶部 chrome（锚定到真实界面）----
+  function drawChrome(){
+    ctx.fillStyle=C.walnut1; ctx.fillRect(0,0,W,64);
+    ctx.fillStyle=C.chrome; ctx.font='600 22px "Songti SC","SimSun",serif';
+    ctx.textBaseline='middle'; ctx.textAlign='left';
+    ctx.fillText('芙洛理', 26, 33);
+    ctx.fillStyle=C.chromeDim; ctx.font='13px ui-monospace,monospace';
+    ctx.fillText('FLORI · 活字印知 概念原型', 96, 35);
+    // tabs
+    const tabs=[['知识库',true],['练考',false],['复盘',false]];
+    let tx=W-26; ctx.textAlign='right';
+    for(let i=tabs.length-1;i>=0;i--){
+      const [name,on]=tabs[i];
+      ctx.font='600 15px "Songti SC",serif';
+      const w=ctx.measureText(name).width+22;
+      tx-=w;
+      ctx.fillStyle = on? C.tabOn : C.chromeDim;
+      ctx.fillText(name, tx+w-11, 33);
+      if(on){ ctx.fillRect(tx+10, 52, w-20, 2); }
+      tx-=14;
+    }
+    ctx.textAlign='left';
+  }
+
+  // ---- 音效：压印“咚”（WebAudio 合成，无外部资源）----
+  let AC=null;
+  function thock(){
+    try{
+      AC = AC || new (window.AudioContext||window.webkitAudioContext)();
+      if(AC.state==='suspended') AC.resume();
+      const t=AC.currentTime;
+      const o=AC.createOscillator(), g=AC.createGain();
+      o.type='sine'; o.frequency.setValueAtTime(180,t); o.frequency.exponentialRampToValueAtTime(70,t+0.12);
+      g.gain.setValueAtTime(0.0001,t); g.gain.exponentialRampToValueAtTime(0.5,t+0.005);
+      g.gain.exponentialRampToValueAtTime(0.0001,t+0.18);
+      o.connect(g).connect(AC.destination); o.start(t); o.stop(t+0.2);
+      // 木质叩击噪声
+      const bs=AC.createBufferSource(); const buf=AC.createBuffer(1,AC.sampleRate*0.05,AC.sampleRate);
+      const d=buf.getChannelData(0); for(let i=0;i<d.length;i++) d[i]=(Math.random()*2-1)*Math.pow(1-i/d.length,3);
+      bs.buffer=buf; const ng=AC.createGain(); ng.gain.setValueAtTime(0.25,t); ng.gain.exponentialRampToValueAtTime(0.0001,t+0.05);
+      bs.connect(ng).connect(AC.destination); bs.start(t);
+    }catch(e){}
+  }
+
+  // ---- 弹簧 update（确定、可控、有落定过冲）----
+  function spring(s, target, k, damp, dt){
+    const a = (target - s.press)*k - s.pressV*damp;
+    s.pressV += a*dt; s.press += s.pressV*dt;
+  }
+
+  function update(dt, now){
+    blocks.forEach(b=>{
+      b.idle += dt;
+      if(b.state==='loose' || b.state==='selected'){
+        // 松散：极小幅度缓慢漂浮（确定、克制，非乱跑）
+        b.press = 0; b.pressV=0;
+        // 答错颤动用独立通道
+        b.shakeV += (-b.shake*120 - b.shakeV*14)*dt; b.shake += b.shakeV*dt;
+        b.seal = 0;
+      } else if(b.state==='locking'){
+        spring(b, 1, 220, 22, dt);   // 压印落座
+        if(b.press>0.985){ b.press=1; b.state='locked'; }
+        b.seal = Math.max(0, (b.press-0.55)/0.45);
+        b.shake=0; b.shakeV=0;
+      } else if(b.state==='locked'){
+        b.press=1; b.seal=1; b.shake=0;
+      }
+    });
+  }
+
+  function drawBlock(b){
+    const floatY = (b.state==='loose'||b.state==='selected')
+      ? Math.sin(b.idle*1.1 + b.phase)*2.2 : 0;
+    const floatX = (b.state==='loose'||b.state==='selected')
+      ? Math.cos(b.idle*0.8 + b.phase)*1.4 : 0;
+    const sx = b.shake*6;                 // 答错横向颤
+    const py = b.press*9;                 // 压印下沉
+    const sc = 1 - b.press*0.05;          // 落座微缩
+    const rot = (b.state==='loose'||b.state==='selected') ? Math.sin(b.idle*0.9+b.phase)*0.025 : 0;
+    const x = b.cx + floatX + sx;
+    const y = b.cy + floatY + py;
+
+    ctx.save();
+    ctx.translate(x, y); ctx.rotate(rot); ctx.scale(sc, sc);
+
+    // 落座阴影（越压越实）
+    ctx.fillStyle = 'rgba(0,0,0,'+(0.18+b.press*0.30)+')';
+    roundRect(ctx, -bw/2+3, -bh/2+6, bw, bh, 9); ctx.fill();
+
+    // 字块体（骨白活字，左上高光、右下暗面 → 立体雕感）
+    const g=ctx.createLinearGradient(-bw/2,-bh/2,bw/2,bh/2);
+    g.addColorStop(0,'#f6ecd6'); g.addColorStop(.5,C.blockTop); g.addColorStop(1,C.blockBot);
+    ctx.fillStyle=g; roundRect(ctx,-bw/2,-bh/2,bw,bh,9); ctx.fill();
+    ctx.strokeStyle='rgba(120,95,60,.55)'; ctx.lineWidth=1.2;
+    roundRect(ctx,-bw/2,-bh/2,bw,bh,9); ctx.stroke();
+    // 顶面高光边
+    ctx.strokeStyle='rgba(255,250,235,.6)'; ctx.lineWidth=1;
+    roundRect(ctx,-bw/2+2,-bh/2+2,bw-4,bh-4,7); ctx.stroke();
+
+    // 悬停 / 选中 → 青描边
+    if(b.hover && b.state==='loose'){
+      ctx.strokeStyle=C.jade; ctx.lineWidth=2.2; roundRect(ctx,-bw/2-2,-bh/2-2,bw+4,bh+4,10); ctx.stroke();
+    }
+    if(b.state==='selected'){
+      ctx.strokeStyle=C.jade; ctx.lineWidth=2.6; roundRect(ctx,-bw/2-3,-bh/2-3,bw+6,bh+6,11); ctx.stroke();
+    }
+
+    // 字（凹刻：暗字 + 高光偏移）
+    ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.font='600 '+Math.floor(bw*0.40)+'px "Songti SC","STSong","SimSun",serif';
+    if(b.state==='locked'){ ctx.fillStyle='rgba(255,250,235,.5)'; ctx.fillText(b.t, 1.2, 1.4); }
+    ctx.fillStyle = b.state==='locked' ? C.ink : '#3a2c1a';
+    ctx.fillText(b.t, 0, 0);
+
+    // 朱砂印（落座时“啪”地盖下）
+    if(b.seal>0.01){
+      ctx.save();
+      const ss = (1.5 - 0.5*b.seal);      // 盖下时由大缩到原寸
+      ctx.globalAlpha = b.seal;
+      ctx.translate(bw/2-16, -bh/2+16); ctx.scale(ss, ss);
+      ctx.fillStyle=C.seal; roundRect(ctx,-13,-13,26,26,5); ctx.fill();
+      ctx.fillStyle='#f3e3cf'; ctx.font='700 15px "Songti SC",serif';
+      ctx.fillText('印',0,1);
+      ctx.restore();
+    }
+    ctx.restore();
+  }
+
+  function roundRect(c,x,y,w,h,r){
+    c.beginPath();
+    c.moveTo(x+r,y); c.arcTo(x+w,y,x+w,y+h,r); c.arcTo(x+w,y+h,x,y+h,r);
+    c.arcTo(x,y+h,x,y,r); c.arcTo(x,y,x+w,y,r); c.closePath();
+  }
+
+  // ---- 命中测试 ----
+  function hitBlock(mx,my){
+    for(const b of blocks){
+      if(b.state!=='loose') continue;
+      const dx=mx-b.cx, dy=my-b.cy;
+      if(Math.abs(dx)<bw/2 && Math.abs(dy)<bh/2) return b;
+    }
+    return null;
+  }
+
+  // ---- 交互 ----
+  let active=null; // 抽测中的字块
+  const quiz=document.getElementById('quiz'), qtext=document.getElementById('qtext');
+  function openQuiz(b){
+    active=b; b.state='selected';
+    qtext.textContent=b.q;
+    quiz.style.display='block';
+  }
+  function closeQuiz(){ quiz.style.display='none'; if(active && active.state==='selected') active.state='loose'; active=null; }
+  document.getElementById('ok').onclick=()=>{
+    if(active){ active.state='locking'; active.pressV=2.0; thock(); }
+    closeQuiz();
+  };
+  document.getElementById('no').onclick=()=>{
+    if(active){ active.shakeV=8; }   // 轻颤后归位（仍 loose）
+    closeQuiz();
+  };
+
+  canvas.addEventListener('mousemove',e=>{
+    const r=canvas.getBoundingClientRect();
+    const mx=(e.clientX-r.left), my=(e.clientY-r.top);
+    blocks.forEach(b=> b.hover = (hitBlock(mx,my)===b));
+    canvas.style.cursor = hitBlock(mx,my)?'pointer':'default';
+  });
+  canvas.addEventListener('click',e=>{
+    const r=canvas.getBoundingClientRect();
+    const b=hitBlock(e.clientX-r.left, e.clientY-r.top);
+    if(b) openQuiz(b);
+  });
+
+  // 顶部小工具按钮（DOM 覆盖在 canvas 上）
+  const bar=document.getElementById('bar');
+  bar.innerHTML='<span class="t">已印 0</span> / 20 · 概念原型：活字印知 落在「知识库 / 复盘」';
+  function refreshBar(){
+    const n=blocks.filter(b=>b.state==='locked').length;
+    bar.innerHTML='<span class="t">已印 '+n+'</span> / '+blocks.length+' · 概念原型：活字印知 落在「知识库 / 复盘」';
+  }
+  const btnWrap=document.createElement('div');
+  btnWrap.style.cssText='position:fixed;right:18px;top:14px;z-index:4;display:flex;gap:8px;';
+  function mkBtn(label,fn){
+    const b=document.createElement('button'); b.textContent=label;
+    b.style.cssText='border:1px solid #6b5638;background:#241a10;color:#e9ddc8;font:13px "Songti SC",serif;'+
+      'padding:6px 12px;border-radius:8px;cursor:pointer;';
+    b.onmouseenter=()=>b.style.filter='brightness(1.2)';
+    b.onmouseleave=()=>b.style.filter='';
+    b.onclick=fn; btnWrap.appendChild(b); return b;
+  }
+  document.body.appendChild(btnWrap);
+  mkBtn('随机抽测',()=>{ const loose=blocks.filter(b=>b.state==='loose'); if(loose.length) openQuiz(loose[(Math.random()*loose.length)|0]); });
+  mkBtn('重排字盘',()=>{ blocks.forEach(b=>{ b.state='loose'; b.press=0; b.pressV=0; b.seal=0; b.shake=0; b.shakeV=0; }); refreshBar(); });
+
+  // ---- 主循环 ----
+  let last=performance.now();
+  function frame(now){
+    const dt=Math.min(0.033,(now-last)/1000); last=now;
+    update(dt, now);
+    ctx.clearRect(0,0,W,H);
+    ctx.fillStyle=C.walnut2; ctx.fillRect(0,0,W,H);
+    drawChrome();
+    ctx.drawImage(plate,0,0,W,H);
+    blocks.forEach(drawBlock);
+    refreshBar();
+    requestAnimationFrame(frame);
+  }
+  refreshBar();
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

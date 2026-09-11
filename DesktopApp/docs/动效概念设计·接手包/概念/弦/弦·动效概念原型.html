@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>弦 · 时序 — 芙洛理复盘动效概念原型</title>
+<style>
+  :root{
+    --bg:#0e0f12; --bg2:#131419; --line:#262a31;
+    --amber:#d8a657; --muted:#8a8f98; --txt:#c9cdd4;
+    --tab:#3a3f47; --tabOn:#d8a657;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{
+    background:var(--bg); color:var(--txt);
+    font-family:-apple-system,"PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+    overflow:hidden; user-select:none; -webkit-user-select:none;
+  }
+  .app{display:flex; flex-direction:column; height:100vh}
+  .topbar{
+    display:flex; align-items:center; gap:18px;
+    padding:14px 22px; border-bottom:1px solid var(--line);
+    background:linear-gradient(180deg,#15171c,#101115);
+  }
+  .brand{font-size:15px; letter-spacing:.18em; color:var(--amber); font-weight:600}
+  .brand small{color:var(--muted); letter-spacing:.1em; font-weight:400; margin-left:8px; font-size:12px}
+  .tabs{display:flex; gap:6px; margin-left:8px}
+  .tab{
+    font-size:13px; padding:6px 14px; border-radius:2px; color:var(--muted);
+    border:1px solid transparent; cursor:pointer;
+  }
+  .tab.on{color:#0e0f12; background:var(--amber); font-weight:600}
+  .tab:hover:not(.on){color:var(--txt); border-color:var(--line)}
+  .spacer{flex:1}
+  .countdown{font-size:12px; color:var(--muted); letter-spacing:.05em}
+  .countdown b{color:var(--amber); font-weight:600; font-size:14px}
+  .stage{position:relative; flex:1; min-height:0}
+  canvas{display:block; width:100%; height:100%; cursor:crosshair}
+  .hint{
+    position:absolute; left:0; right:0; bottom:0; padding:8px 22px;
+    font-size:11.5px; color:#5f656e; letter-spacing:.04em;
+    background:linear-gradient(0deg,rgba(14,15,18,.92),rgba(14,15,18,0));
+    pointer-events:none;
+  }
+  .hint b{color:var(--muted); font-weight:500}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="topbar">
+    <div class="brand">律 ZHI<small>复盘 · 弦时序</small></div>
+    <div class="tabs">
+      <div class="tab on">复盘</div>
+      <div class="tab">知识库</div>
+      <div class="tab">练考</div>
+    </div>
+    <div class="spacer"></div>
+    <div class="countdown">距国考 <b id="cd">105</b> 天 · 今日已复盘 <b id="st">0</b> 天连续</div>
+  </div>
+  <div class="stage">
+    <canvas id="cv"></canvas>
+    <div class="hint">悬停 <b>轻拨弦</b> · 拖动 <b>扫弦</b> · 单击 <b>标记今日（弦会颤一下并生长）</b> · 滚轮 <b>平移时间窗</b></div>
+  </div>
+</div>
+
+<script>
+"use strict";
+(function(){
+  var canvas = document.getElementById("cv");
+  var ctx = canvas.getContext("2d");
+  if(!ctx){ document.body.innerHTML = "<p style='color:#d8a657;padding:40px'>当前环境不支持 Canvas2D。</p>"; return; }
+
+  // ---------- 确定性演示数据 (LCG) ----------
+  var _s = 20260816;
+  function rnd(){ _s = (_s*1103515245 + 12345) & 0x7fffffff; return _s / 0x7fffffff; }
+  var TOTAL = 90;            // 历史天数
+  var N_VIEW = 28;           // 可见窗口
+  var FOCUS_REF = 180;       // 满分专注参考(分钟)
+  var THRESH = 12;           // 薄弱日阈值(练考正确率%)
+  var days = [];
+  var streak = 0;
+  for(var d=0; d<TOTAL; d++){
+    var focus = Math.round(40 + rnd()*240);
+    if(rnd() < 0.16) focus = 0;                 // 休息日
+    var points = rnd() < 0.7 ? Math.round(rnd()*11) : 0;
+    var quiz = Math.round(rnd()*100);
+    if(focus === 0) quiz = 0;
+    var cur = (rnd() < 0.55) ? 1 : 0;            // 时政日练
+    if(focus > 0 && cur) streak++; else streak = (focus>0?0:streak);
+    days.push({ focus:focus, points:points, quiz:quiz, shizheng:cur, streakRun:streak });
+  }
+  var TODAY = TOTAL - 1;
+  days[TODAY].focus = Math.max(days[TODAY].focus, 99);
+
+  // ---------- 通道定义 ----------
+  var CH = [
+    { key:"focus",  label:"专注",  color:"#d8a657", amp:64, base:0 },
+    { key:"points", label:"考点",  color:"#9a8f7a", amp:26, base:0 },
+    { key:"quiz",   label:"练考",  color:"#8a93a0", amp:42, base:0 },
+    { key:"streak", label:"打卡",  color:"#c06a4d", amp:9,  base:0 },
+    { key:"shizheng",label:"时政", color:"#7fa07a", amp:22, base:0 }
+  ];
+  var NCH = CH.length;
+
+  // ---------- 弦网格 ----------
+  var M = 260;               // 每根弦节点数
+  var restY = [];            // 静止轮廓 (相对各自基线)
+  var y = [];                // 当前位移偏差
+  var v = [];                // 速度
+  for(var c=0; c<NCH; c++){ restY.push(new Float32Array(M)); y.push(new Float32Array(M)); v.push(new Float32Array(M)); }
+
+  var viewStart = TOTAL - N_VIEW;   // 窗口起点 day 索引
+  function dayAtCol(i){ // 列 -> day
+    var t = i/(M-1);
+    var dd = viewStart + t*(N_VIEW-1);
+    return Math.round(dd);
+  }
+  function colAtDay(dd){
+    var t = (dd - viewStart)/(N_VIEW-1);
+    return Math.round(t*(M-1));
+  }
+  function recomputeRest(){
+    var baseY = [];
+    var top = stagePad.top, bot = stageH - stagePad.bot;
+    var gap = (bot - top)/(NCH-1);
+    for(var c=0; c<NCH; c++) baseY[c] = top + gap*c;
+    for(var c=0; c<NCH; c++){
+      var ch = CH[c];
+      for(var i=0;i<M;i++){
+        var dd = dayAtCol(i);
+        var dv = days[dd][ch.key];
+        var norm = (ch.key==="focus") ? dv/FOCUS_REF
+                 : (ch.key==="points") ? dv/11
+                 : (ch.key==="quiz") ? dv/100
+                 : (ch.key==="streak") ? (dv>0?1:0)
+                 : (ch.key==="shizheng") ? (dv>0?1:0) : 0;
+        restY[c][i] = baseY[c] - norm*ch.amp;
+        CH[c].base = baseY[c];
+      }
+    }
+  }
+
+  // ---------- 波动方程 (确定可控) ----------
+  var C2 = 0.16, DAMP = 0.992, CPL = 0.03, SIG = 2.4;
+  function pluck(ch, col, amp){
+    if(col<1) col=1; if(col>M-2) col=M-2;
+    for(var k=-6;k<=6;k++){
+      var ci = col+k; if(ci<1||ci>M-2) continue;
+      v[ch][ci] += amp * Math.exp(-(k*k)/(2*SIG*SIG));
+    }
+  }
+  function step(){
+    // 耦合用的邻弦平均
+    var nb = new Float32Array(M);
+    for(var i=1;i<M-1;i++){
+      var s=0,n=0;
+      for(var c=0;c<NCH;c++){ s+=y[c][i]; n++; }
+      nb[i] = s/n;
+    }
+    for(var c=0;c<NCH;c++){
+      var Y=y[c], V=v[c];
+      for(var i=1;i<M-1;i++){
+        var lap = Y[i-1] + Y[i+1] - 2*Y[i];
+        var a = C2*lap + CPL*(nb[i]-Y[i]);
+        V[i] = (V[i] + a) * DAMP;
+      }
+      for(var i=1;i<M-1;i++){ Y[i] += V[i]; }
+      Y[0]=0; Y[M-1]=0; V[0]=0; V[M-1]=0;
+    }
+  }
+
+  // ---------- 布局 / 渲染 ----------
+  var DPR=1, W=0, H=0, stageW=0, stageH=0;
+  var stagePad = { top:54, bot:64, left:78, right:30 };
+  function resize(){
+    DPR = Math.min(2, window.devicePixelRatio||1);
+    var r = canvas.getBoundingClientRect();
+    W = Math.max(2, Math.floor(r.width)); H = Math.max(2, Math.floor(r.height));
+    canvas.width = W*DPR; canvas.height = H*DPR;
+    ctx.setTransform(DPR,0,0,DPR,0,0);
+    stageW = W - stagePad.left - stagePad.right;
+    stageH = H;
+    recomputeRest();
+  }
+
+  var hoverCol = -1, hoverDay = -1, hoverX=0, hoverY=0;
+  function colAtX(px){ var t=(px-stagePad.left)/stageW; return Math.max(0,Math.min(M-1, Math.round(t*(M-1)))); }
+  function xAtCol(i){ return stagePad.left + (i/(M-1))*stageW; }
+
+  var markGlow = 0; // 标记今日后的瞬时高亮衰减
+  function draw(){
+    ctx.clearRect(0,0,W,H);
+    // 背景微分层
+    ctx.fillStyle = "#0e0f12"; ctx.fillRect(0,0,W,H);
+
+    // 通道标签 + 基线
+    ctx.font = "12px -apple-system,'PingFang SC',sans-serif";
+    ctx.textBaseline = "middle";
+    for(var c=0;c<NCH;c++){
+      var by = CH[c].base;
+      ctx.strokeStyle = "rgba(38,42,49,0.55)";
+      ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(stagePad.left, by+0.5); ctx.lineTo(stagePad.left+stageW, by+0.5); ctx.stroke();
+      ctx.fillStyle = CH[c].color; ctx.globalAlpha = 0.85;
+      ctx.fillText(CH[c].label, 14, by);
+      ctx.globalAlpha = 1;
+    }
+
+    // 连续打卡高亮带 (focus 弦上)
+    var fc = 0;
+    var runStart=-1;
+    for(var i=0;i<M;i++){
+      var dd = dayAtCol(i);
+      if(days[dd].streakRun>0){ if(runStart<0) runStart=i; }
+      else { if(runStart>=0){ drawStreakBand(runStart,i-1); runStart=-1; } }
+    }
+    if(runStart>=0) drawStreakBand(runStart,M-1);
+
+    // 绘制每根弦
+    for(var c=0;c<NCH;c++){
+      var Y=y[c], R=restY[c], col=CH[c].color;
+      ctx.strokeStyle = col; ctx.lineWidth = (c===0)?1.4:1;
+      ctx.globalAlpha = (c===0)?0.95:0.62;
+      ctx.beginPath();
+      for(var i=0;i<M;i++){
+        var x = xAtCol(i), yy = R[i] + Y[i];
+        if(i===0) ctx.moveTo(x,yy); else ctx.lineTo(x,yy);
+      }
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+
+      // 考点 / 时政 的离散刻度（落在弦上的小竖记）
+      if(CH[c].key==="points" || CH[c].key==="shizheng"){
+        ctx.fillStyle = col; ctx.globalAlpha = 0.9;
+        var seen=new Set();
+        for(var i=0;i<M;i++){
+          var dd=dayAtCol(i);
+          if(seen.has(dd)) continue; seen.add(dd);
+          var val = days[dd][CH[c].key];
+          if(val>0){
+            var x=xAtCol(i);
+            var len = (CH[c].key==="points")? Math.min(14,4+val) : 8;
+            ctx.fillRect(x-0.5, R[i]-len, 1, len*2);
+          }
+        }
+        ctx.globalAlpha=1;
+      }
+    }
+
+    // 今日竖线
+    var tCol = colAtDay(TODAY);
+    var tx = xAtCol(tCol);
+    ctx.strokeStyle = "rgba(216,166,87,"+(0.5+0.4*markGlow)+")";
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(tx, stagePad.top-10); ctx.lineTo(tx, stageH-stagePad.bot+10); ctx.stroke();
+    // 今日节点
+    var ty = restY[0][tCol] + y[0][tCol];
+    ctx.fillStyle = "#d8a657";
+    ctx.beginPath(); ctx.arc(tx, ty, 3.2+2.5*markGlow, 0, Math.PI*2); ctx.fill();
+
+    // 悬停信息
+    if(hoverDay>=0 && hoverDay<TOTAL){
+      var dd = hoverDay, x = hoverX;
+      var d = days[dd];
+      var lines = [
+        "第 "+(dd+1)+" 天",
+        "专注 "+d.focus+" 分",
+        "考点 "+d.points+" 个",
+        "练考 "+(d.focus>0?d.quiz+"%":"—"),
+        "时政 "+(d.shizheng?"有":"无"),
+        "连续 "+d.streakRun+" 天"
+      ];
+      var bw=118, bh=lines.length*16+14, bx=x+14, byy=Math.max(8,hoverY-bh/2);
+      if(bx+bw>W) bx=x-bw-14;
+      ctx.fillStyle="rgba(20,22,27,0.92)"; ctx.strokeStyle="rgba(216,166,87,0.5)"; ctx.lineWidth=1;
+      ctx.beginPath(); ctx.rect(bx,byy,bw,bh); ctx.fill(); ctx.stroke();
+      ctx.fillStyle="#c9cdd4"; ctx.font="12px -apple-system,'PingFang SC',sans-serif"; ctx.textBaseline="middle";
+      for(var li=0;li<lines.length;li++) ctx.fillText(lines[li], bx+10, byy+12+li*16);
+      // 悬停竖线
+      ctx.strokeStyle="rgba(201,205,212,0.25)"; ctx.beginPath();
+      ctx.moveTo(hoverX, stagePad.top-10); ctx.lineTo(hoverX, stageH-stagePad.bot+10); ctx.stroke();
+      // 悬停点
+      var hc=colAtX(hoverX);
+      ctx.fillStyle="#d8a657"; ctx.beginPath(); ctx.arc(hoverX, restY[0][hc]+y[0][hc], 2.4, 0, Math.PI*2); ctx.fill();
+    }
+    markGlow *= 0.94;
+  }
+  function drawStreakBand(a,b){
+    ctx.fillStyle="rgba(192,106,77,0.10)";
+    var ya = restY[0][a], yb = restY[0][b];
+    var xa=xAtCol(a), xb=xAtCol(b);
+    ctx.fillRect(xa, ya-3, xb-xa, 6);
+  }
+
+  // ---------- 交互 ----------
+  var dragging=false, downX=0, downY=0, moved=0, lastCol=-1, userTouched=false;
+  function localXY(e){
+    var r=canvas.getBoundingClientRect();
+    return { x:e.clientX-r.left, y:e.clientY-r.top };
+  }
+  function pluckHover(px){
+    var col = colAtX(px);
+    if(col===lastCol) return; lastCol=col;
+    pluck(0, col, 2.2);            // 轻拨 hero 弦
+    for(var c=1;c<NCH;c++) pluck(c, col, 0.5); // 邻弦微弱共鸣
+  }
+  canvas.addEventListener("pointermove", function(e){
+    var p=localXY(e); hoverX=p.x; hoverY=p.y; hoverCol=colAtX(p.x); hoverDay=dayAtCol(hoverCol);
+    if(dragging){
+      var dx=p.x-downX; moved=Math.max(moved,Math.abs(dx)+Math.abs(p.y-downY));
+      pluck(0, hoverCol, 3.4);
+      for(var c=1;c<NCH;c++) pluck(c, hoverCol, 0.8);
+    } else {
+      pluckHover(p.x);
+    }
+  });
+  canvas.addEventListener("pointerdown", function(e){
+    userTouched=true; autoDemo=false;
+    var p=localXY(e); downX=p.x; downY=p.y; moved=0; dragging=true;
+    canvas.setPointerCapture && canvas.setPointerCapture(e.pointerId);
+  });
+  canvas.addEventListener("pointerup", function(e){
+    dragging=false;
+    if(moved < 6){ // 视为单击 = 标记今日
+      markToday();
+    }
+  });
+  canvas.addEventListener("pointerleave", function(){ hoverDay=-1; hoverCol=-1; lastCol=-1; });
+  canvas.addEventListener("wheel", function(e){
+    e.preventDefault();
+    var step = e.deltaY>0 ? 2 : -2;
+    viewStart = Math.max(0, Math.min(TOTAL-N_VIEW, viewStart+step));
+    recomputeRest();
+  }, {passive:false});
+  function markToday(){
+    days[TODAY].focus = Math.min(360, days[TODAY].focus + 42); // 确定式 +42 生长
+    recomputeRest();
+    var tc = colAtDay(TODAY);
+    pluck(0, tc, 16); for(var c=1;c<NCH;c++) pluck(c, tc, 3.2);
+    markGlow = 1;
+    streakToday++;
+    var cd = document.getElementById("st"); if(cd) cd.textContent = streakToday;
+  }
+  var streakToday = days[TODAY].streakRun;
+
+  // ---------- 自动演示 (被真实操作立即打断) ----------
+  var autoDemo = true, demoT = 0;
+  function autoStrum(){
+    if(!autoDemo) return;
+    demoT++;
+    if(demoT % 26 === 0){
+      var col = 30 + Math.floor(rnd()*(M-60));
+      pluck(0, col, 7); for(var c=1;c<NCH;c++) pluck(c, col, 1.4);
+    }
+  }
+
+  // ---------- 主循环 ----------
+  var frames = 0, err = 0;
+  function frame(){
+    try{
+      autoStrum();
+      step(); step();   // 两个子步提升波速观感
+      draw();
+      frames++;
+    }catch(ex){ err++; if(window.console) console.error(ex); }
+    requestAnimationFrame(frame);
+  }
+
+  // ---------- 启动 ----------
+  function boot(){
+    resize();
+    recomputeRest();
+    window.addEventListener("resize", resize);
+    requestAnimationFrame(frame);
+  }
+  if(document.readyState === "complete" || document.readyState === "interactive"){
+    setTimeout(boot, 0);
+  } else {
+    window.addEventListener("load", boot);
+  }
+
+  // ---------- headless 校验钩子 ----------
+  window.__cv = canvas;
+  window.__probe = function(){
+    var img, lit=0;
+    try{
+      var w=Math.min(W,400), h=Math.min(H,300);
+      var data = ctx.getImageData(0,0,w,h).data;
+      for(var i=0;i<data.length;i+=4){
+        var lum = data[i]+data[i+1]+data[i+2];
+        if(lum > 90) lit++;   // 比暗底(≈47)明显更亮 = 弦被画出
+      }
+    }catch(e){ err++; }
+    return { frames:frames, lit:lit, days:TOTAL, today:days[TODAY].focus, err:err,
+             viewStart:viewStart, streak:streakToday };
+  };
+})();
+</script>
+</body>
+</html>
