@@ -17,7 +17,7 @@
 #include "net/Realtime.h"   // §3 实时网关：JoinRoom / SendChat / SendPresence / On / Off
 #include "app/Cloud.h"      // §1/§2 账户与端点；net::ToUtf8 / FromUtf8 经 net/Http.h
 #include "core/FocusTracker.h"  // P1-5 #71 番茄钟联动前台学习状态
-#include "ui/FieldText.h"   // 隐藏 EDIT 代理：PaintFieldEdit / ReadEditBuffer / EditCaretPos（IME）
+#include "ui/FieldEdit.h"   // v2 统一输入框（1×1 透明代理 + D3D 自绘，无白块）
 
 namespace lj {
 
@@ -79,10 +79,8 @@ private:
     void WlAddText();                 // 把输入框文本加入名单
     void WlAddCurrentForeground();    // 一键加入当前前台进程
     void WlCommit();                  // 落盘 + 注入 FocusTracker
-    void EnsureWlEditor();
     void BeginWlEdit();
     void EndWlEdit();
-    static LRESULT CALLBACK WlEditProc(HWND w, UINT msg, WPARAM wp, LPARAM lp);
 
     // ---- #71 专注结束提醒 ----
     void ShowToast(const std::wstring& msg);
@@ -150,14 +148,10 @@ private:
     std::wstring m_wlHint;                   // 操作反馈（添加成功/重复等）
     float  m_wlHintT = 0.0f;
 
-    // 白名单输入代理（隐藏 EDIT，文字/光标由 D3D 自绘；面板固定不随滚动）
-    HWND    m_wlEditHwnd = nullptr;
-    WNDPROC m_wlEditOld = nullptr;
-    HFONT   m_wlEditFont = nullptr;
+    // 白名单输入框（v2 统一输入框；面板固定不随滚动，文字/光标/IME 由 D3D 自绘）
+    FieldEdit m_wl;
     bool    m_wlEdit = false;
     std::wstring m_wlText;
-    std::wstring m_wlComp;                   // IME 组合串
-    int     m_wlCompCaret = 0;
 
     // ---- #71 专注结束提醒（应用内提示条）----
     float  m_toastT = 0.0f;
@@ -234,29 +228,16 @@ private:
     std::vector<std::pair<std::wstring, std::wstring>> m_music; bool m_hasMusic = false;
     bool m_netLive = false;        // 快照时是否连上服务端（Realtime::Connected）
 
-    // 聊天输入：隐藏 Win32 EDIT 作「输入法/键盘捕获代理」（1x1 透明，同 ManageView 字段编辑），
-    // 可见文字与光标由 D3D 自绘（PaintFieldEdit），中文输入法照常工作。
+    // 聊天输入：v2 统一输入框（1×1 透明代理收键盘 + IME，文字/光标/组合串全由 D3D 自绘）。
     bool m_chatEdit = false;
     std::wstring m_compose;
     Button m_sendBtn;
     D2D1_RECT_F m_chatInputRect{};
     D2D1_RECT_F m_chatSendRect{};
-    HWND m_chatEditHwnd = nullptr;      // 隐藏 EDIT 代理（IME / 键盘捕获）
-    WNDPROC m_chatEditOld = nullptr;
-    HFONT m_chatEditFont = nullptr;
-    void EnsureChatEditor();
+    Canvas* m_cvCached = nullptr;       // Update 内 HandleMouse 需要测量
+    FieldEdit m_chatBox;                // 聊天输入框（避开消息列表 m_chat 的名字）
     void BeginChatEdit();
     void EndChatEdit(bool send);        // true=发送并清空；false=退出编辑但保留文本
-    static LRESULT CALLBACK ChatEditProc(HWND w, UINT msg, WPARAM wp, LPARAM lp);
-
-    // ---- 中文 IME 合成（P1-2）----
-    // 组合串（拼音/未上屏候选）不在 EDIT 文本缓冲里，必须从 IME 上下文取出自绘；
-    // 候选窗则要按「组合串起点」定位，否则默认贴在代理窗左上角，滚动后更会飘。
-    std::wstring m_imeComp;             // 当前组合串（未提交）
-    int   m_imeCompCaret = 0;           // 组合串内光标（字符）
-    float m_imeAnchorX = 0.0f;          // 组合串起点绝对 x（DIP，文档坐标）；Paint 写、消息回调读
-    void  SyncChatEditorRect();         // 随滚动同步代理窗位置（候选窗随之跟手）
-    int   m_chatEditPlaced[4] = { -1, -1, -1, -1 };   // 上次放置的 L/T/W/H，避免每帧 SetWindowPos
 
     // 下行处理器（Realtime 后台线程回调，只写受锁缓冲 + 置 m_netDirty）
     void OnNetPresence(const lj::json::JVal& m);

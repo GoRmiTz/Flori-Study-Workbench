@@ -41,63 +41,19 @@ std::wstring KindLabel(const std::wstring& k)
 } // namespace
 
 // ============================================================
-//  Win32 EDIT 子类化
+//  编辑（v2 统一输入框）
 // ============================================================
-LRESULT CALLBACK ProfileView::EditProc(HWND w, UINT msg, WPARAM wp, LPARAM lp)
-{
-    ProfileView* self = (ProfileView*)GetWindowLongPtrW(w, GWLP_USERDATA);
-    if (self) {
-        if (msg == WM_KEYDOWN) {
-            if (wp == VK_RETURN) { self->CommitEdit(); return 0; }
-            if (wp == VK_ESCAPE) { self->CancelEdit(); return 0; }
-        } else if (msg == WM_KILLFOCUS) {
-            self->CommitEdit();
-        } else if (msg == WM_SETFOCUS) {
-            int len = GetWindowTextLengthW(w);
-            SendMessageW(w, EM_SETSEL, (WPARAM)len, (LPARAM)len);  // 焦点时光标置文末
-        }
-    }
-    WNDPROC old = self ? self->m_editOld : nullptr;
-    LRESULT r = old ? CallWindowProcW(old, w, msg, wp, lp) : DefWindowProcW(w, msg, wp, lp);
-    // 隐藏隐藏代理 EDIT 的原生系统光标：我们用 D3D 自绘光标，
-    // 否则原生光标会在 1×1 代理所在的输入框左上角闪一下。
-    if (msg == WM_SETFOCUS || msg == WM_KEYDOWN || msg == WM_CHAR ||
-        msg == WM_IME_STARTCOMPOSITION || msg == WM_IME_COMPOSITION || msg == WM_IME_CHAR)
-        HideCaret(w);
-    return r;
-}
-
-void ProfileView::EnsureEditor()
-{
-    if (m_edit) return;
-    HWND parent = AppHwnd();
-    if (!parent) return;
-    // 不加 WS_EX_TRANSPARENT：编辑态铺成字段全尺寸收鼠标（点击定位/拖拽框选），
-    // 配合 WM_SETREDRAW(FALSE) 不自绘——文字/光标/选区全由 D3D 绘制。
-    m_edit = CreateWindowExW(0, L"EDIT", L"",
-                             WS_CHILD | ES_AUTOHSCROLL | ES_LEFT,
-                             0, 0, 10, 10, parent, nullptr,
-                             (HINSTANCE)GetWindowLongPtrW(parent, GWLP_HINSTANCE), nullptr);
-    if (!m_edit) return;
-    m_editOld = (WNDPROC)SetWindowLongPtrW(m_edit, GWLP_WNDPROC, (LONG_PTR)EditProc);
-    SetWindowLongPtrW(m_edit, GWLP_USERDATA, (LONG_PTR)this);
-    m_editFont = CreateFontW(-16, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-                             DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                             DEFAULT_QUALITY, DEFAULT_PITCH | FF_DONTCARE,
-                             L"Microsoft YaHei UI");
-    if (m_editFont) SendMessageW(m_edit, WM_SETFONT, (WPARAM)m_editFont, TRUE);
-    ShowWindow(m_edit, SW_HIDE);
-}
-
 void ProfileView::BeginEdit(int field, const D2D1_RECT_F& r)
 {
-    EnsureEditor();
-    if (!m_edit) return;
     if (m_editingOn) CommitEdit();
+    if (field < 0 || field > 4) return;
     m_editField = field;
     m_editingOn = true;
-    // 所有资料格背板都是纯 paperHi，输入框背景与其一致 → 无缝
-    lj::SetEditBackdrop(AppPalette().paperHi);
+    // 1×1 透明代理只收键盘 + IME，字段上无任何 GDI 子窗口（无白块）；
+    // 文字/光标/选区/IME 组合串全由 D3D 绘制。
+    m_edit.onEnter     = [this] { CommitEdit(); };
+    m_edit.onEsc       = [this] { CancelEdit(); };
+    m_edit.onKillFocus = [this] { CommitEdit(); };
 
     std::wstring cur;
     switch (field) {
@@ -107,21 +63,8 @@ void ProfileView::BeginEdit(int field, const D2D1_RECT_F& r)
         case PF_BIRTH:  cur = m_profile.birthday; break;
         default: break;
     }
-    SetWindowTextW(m_edit, cur.c_str());
-
-    // 编辑框铺满字段全尺寸（内部处理鼠标点击定位/拖拽框选），
-    // WM_SETREDRAW(FALSE) 禁止自绘——可见文字/光标/选区全由 D3D 绘制。
-    float s = (float)AppDpi() / 96.0f;
-    int L = (int)(r.left * s);
-    int T = (int)((r.top - ScrollY()) * s);
-    int W = (int)((r.right - r.left) * s), H = (int)((r.bottom - r.top) * s);
-    SetWindowPos(m_edit, nullptr, L, T, W > 1 ? W : 1, H > 1 ? H : 1, SWP_NOZORDER);
-    SendMessageW(m_edit, WM_SETREDRAW, FALSE, 0);
-    ShowWindow(m_edit, SW_SHOW);
-    SetFocus(m_edit);
-    // 光标置于文末（默认在文首，与「点输入框→光标在末尾」的预期相悖）
-    int len = GetWindowTextLengthW(m_edit);
-    SendMessageW(m_edit, EM_SETSEL, (WPARAM)len, (LPARAM)len);
+    m_edit.Begin(cur, false, 13.0f);
+    (void)r;   // 位置由 Paint 每帧按字段矩形摆放（1×1 代理贴光标）
 }
 
 void ProfileView::DebugForceOpen()
@@ -132,11 +75,9 @@ void ProfileView::DebugForceOpen()
 
 void ProfileView::CommitEdit()
 {
-    if (!m_editingOn || !m_edit) { m_editingOn = false; return; }
-    int n = GetWindowTextLengthW(m_edit);
-    std::wstring txt; txt.resize((size_t)n + 1);
-    GetWindowTextW(m_edit, &txt[0], n + 1);
-    txt.resize((size_t)n);
+    if (!m_editingOn) { m_editingOn = false; m_editField = -1; return; }
+    std::wstring txt;
+    m_edit.End(true, txt);
 
     switch (m_editField) {
         case PF_BIO:    m_profile.bio = txt; break;
@@ -145,8 +86,6 @@ void ProfileView::CommitEdit()
         case PF_BIRTH:  m_profile.birthday = txt; break;
         default: break;
     }
-    SendMessageW(m_edit, WM_SETREDRAW, TRUE, 0);   // 恢复自绘能力（隐藏后不再画）
-    ShowWindow(m_edit, SW_HIDE);
     m_editingOn = false;
     m_editField = -1;
     SaveProfile();
@@ -154,12 +93,20 @@ void ProfileView::CommitEdit()
 
 void ProfileView::CancelEdit()
 {
-    if (m_edit) {
-        SendMessageW(m_edit, WM_SETREDRAW, TRUE, 0);
-        ShowWindow(m_edit, SW_HIDE);
-    }
+    m_edit.Cancel();
     m_editingOn = false;
     m_editField = -1;
+}
+
+// 当前编辑字段的文字框（与 Paint 中非编辑态文字框完全一致，避免点击后文字跳动）
+D2D1_RECT_F ProfileView::EditTextBox() const
+{
+    if (m_editField == PF_BIO)
+        return { m_bioRect.left + 12.0f, m_bioRect.top, m_bioRect.right - 12.0f, m_bioRect.bottom };
+    if (m_editField < 0 || m_editField > 4) return { 0, 0, 0, 0 };
+    const D2D1_RECT_F& r = m_fieldRects[m_editField];
+    D2D1_RECT_F vr{ r.left + 8.0f, r.top + 26.0f, r.right - 8.0f, r.bottom - 8.0f };
+    return { vr.left + 4.0f, vr.top, vr.right - 4.0f, vr.bottom };
 }
 
 void ProfileView::SaveProfile()
@@ -282,6 +229,7 @@ void ProfileView::OnLeave()
 void ProfileView::Layout(const D2D1_RECT_F& area, Canvas& cv)
 {
     View::Layout(area, cv);
+    m_cvCached = &cv;
 
     float availW = area.right - area.left;
     float contentW = (std::min)(shape::kMaxWidth, availW - 72.0f);
@@ -409,15 +357,15 @@ void ProfileView::Update(float dt, const Input& in)
 
     float mx = in.mouseX, my = in.mouseY + ScrollY();
 
-    // 编辑中：跟随滚动重定位，保证 EDIT 始终贴在原圆角格里
-    if (m_editingOn && m_edit && m_editField >= 0 && m_editField < 5) {
-        const auto& r = m_fieldRects[m_editField];
-        float s = (float)AppDpi() / 96.0f;
-        // 隐藏的输入捕获代理：始终保持 1x1，绝不覆盖设计边框；
-        // 可见文字与光标由 D3D 用软件字体绘制（PaintFieldEdit）。
-        SetWindowPos(m_edit, nullptr,
-                     (int)((r.left + 8.0f) * s), (int)((r.top - ScrollY() + 1.0f) * s),
-                     1, 1, SWP_NOZORDER);
+    // 编辑态：鼠标先交给字段（点击定位光标 / 拖拽框选），点字段外才提交
+    if (m_editingOn && m_editField >= 0 && m_editField < 5 && m_cvCached) {
+        bool bio = (m_editField == PF_BIO);
+        TextStyle ts; ts.role = FontRole::Sans;
+        ts.size = bio ? 12.5f : 13.0f;
+        if (!bio) ts.weight = DWRITE_FONT_WEIGHT_SEMI_BOLD;
+        ts.vAlign = VAlign::Middle;
+        bool inside = m_edit.HandleMouse(in, *m_cvCached, EditTextBox(), ts, ScrollY());
+        if (!inside && in.clicked) CommitEdit();
     }
 
     // 悬停字段
@@ -588,13 +536,16 @@ void ProfileView::PaintHero(Canvas& cv)
                            editing ? shape::kStroke : shape::kHair);
         TextStyle bs; bs.role = FontRole::Sans; bs.size = 12.5f; bs.vAlign = VAlign::Middle;
         bool empty = m_profile.bio.empty();
-        std::wstring disp = editing ? lj::ReadEditBuffer(m_edit)
-                                    : (empty ? L"还没有简介 —— 点这里写一句关于自己的话" : m_profile.bio);
-        D2D1_COLOR_F col = editing ? pal.ink900 : (empty ? pal.ink300 : pal.ink700);
-        int caret = editing ? lj::EditCaretPos(m_edit) : -1;
-        lj::PaintFieldEdit(cv, { m_bioRect.left + 12.0f, m_bioRect.top,
-                                 m_bioRect.right - 12.0f, m_bioRect.bottom },
-                          bs, disp, col, caret, 0.0f);
+        const std::wstring hint = L"还没有简介 —— 点这里写一句关于自己的话";
+        D2D1_RECT_F tbox{ m_bioRect.left + 12.0f, m_bioRect.top,
+                          m_bioRect.right - 12.0f, m_bioRect.bottom };
+        if (editing) {
+            // v2 统一输入框：文字/光标/选区/IME 全由 D3D 绘制
+            m_edit.Paint(cv, tbox, bs, pal.ink900, hint, pal.ink300, 0.0f, ScrollY());
+        } else {
+            lj::PaintFieldEdit(cv, tbox, bs, empty ? hint : m_profile.bio,
+                               empty ? pal.ink300 : pal.ink700, -1, 0.0f);
+        }
     }
 
     // 资料四格
@@ -627,20 +578,19 @@ void ProfileView::PaintHero(Canvas& cv)
             case PF_BIRTH:  val = m_profile.birthday; break;
             case PF_GENDER: val = m_profile.gender; break;
         }
-        // 输入区：与卡片同色的圆角格；编辑时文字由 D3D 用软件字体绘制，
-        // 隐藏的 EDIT 仅作输入捕获代理，不再覆盖设计边框。
+        // 输入区：与卡片同色的圆角格；编辑时文字/光标/选区/IME 全由 D3D 绘制
         D2D1_RECT_F vr{ r.left + 8.0f, r.top + 26.0f, r.right - 8.0f, r.bottom - 8.0f };
         cv.FillRoundRect(vr, 3.0f, pal.paperHi);
         TextStyle vs; vs.role = FontRole::Sans; vs.size = 13.0f;
         vs.weight = DWRITE_FONT_WEIGHT_SEMI_BOLD; vs.vAlign = VAlign::Middle;
         bool empty = val.empty();
-        std::wstring disp = editing ? lj::ReadEditBuffer(m_edit) : (empty ? d.hint : val);
-        D2D1_COLOR_F col = editing ? pal.ink900 : (empty ? pal.ink300 : pal.ink900);
-        int caret = editing ? lj::EditCaretPos(m_edit) : -1;
-        int sa = -1, sb = -1;
-        if (editing) lj::EditSelRange(m_edit, sa, sb);
-        lj::PaintFieldEdit(cv, { vr.left + 4.0f, vr.top, vr.right - 4.0f, vr.bottom },
-                          vs, disp, col, caret, 0.0f, sa, sb);
+        D2D1_RECT_F tbox{ vr.left + 4.0f, vr.top, vr.right - 4.0f, vr.bottom };
+        if (editing) {
+            m_edit.Paint(cv, tbox, vs, pal.ink900, d.hint, pal.ink300, 0.0f, ScrollY());
+        } else {
+            lj::PaintFieldEdit(cv, tbox, vs, empty ? d.hint : val,
+                               empty ? pal.ink300 : pal.ink900, -1, 0.0f);
+        }
     }
 
     cv.PopOpacity();

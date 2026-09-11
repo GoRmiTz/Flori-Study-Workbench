@@ -28,64 +28,23 @@ static bool StartsWith(const std::wstring& s, const std::wstring& pre)
 // F-D10 省区坐标表前向声明（定义在文件下方 FirstDigitRun 之后）
 static const std::vector<std::pair<std::wstring, std::pair<float,float>>>& RegionCoords();
 
-// ---------------- 隐藏 EDIT 代理（专业代码，纯数字）----------------
-LRESULT CALLBACK AdvisorView::EditProc(HWND w, UINT msg, WPARAM wp, LPARAM lp)
-{
-    AdvisorView* self = (AdvisorView*)GetWindowLongPtrW(w, GWLP_USERDATA);
-    if (self) {
-        if (msg == WM_KEYDOWN) {
-            if (wp == VK_RETURN) { self->CommitEdit(); return 0; }
-            if (wp == VK_ESCAPE) { self->CancelEdit(); return 0; }
-        } else if (msg == WM_KILLFOCUS) {
-            self->CommitEdit();
-        }
-    }
-    WNDPROC old = self ? self->m_editOld : nullptr;
-    LRESULT r = old ? CallWindowProcW(old, w, msg, wp, lp) : DefWindowProcW(w, msg, wp, lp);
-    if (msg == WM_SETFOCUS || msg == WM_KEYDOWN || msg == WM_CHAR) HideCaret(w);
-    return r;
-}
-
-void AdvisorView::EnsureEditor()
-{
-    if (m_edit) return;
-    HWND parent = AppHwnd();
-    if (!parent) return;
-    m_edit = CreateWindowExW(0, L"EDIT", L"", WS_CHILD | ES_AUTOHSCROLL | ES_LEFT,
-                             0, 0, 10, 10, parent, nullptr,
-                             (HINSTANCE)GetWindowLongPtrW(parent, GWLP_HINSTANCE), nullptr);
-    if (!m_edit) return;
-    m_editOld = (WNDPROC)SetWindowLongPtrW(m_edit, GWLP_WNDPROC, (LONG_PTR)EditProc);
-    SetWindowLongPtrW(m_edit, GWLP_USERDATA, (LONG_PTR)this);
-    m_editFont = CreateFontW(-16, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-                             DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                             DEFAULT_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Microsoft YaHei UI");
-    if (m_editFont) SendMessageW(m_edit, WM_SETFONT, (WPARAM)m_editFont, TRUE);
-    ShowWindow(m_edit, SW_HIDE);
-}
-
+// ---------------- 专业代码编辑（v2 统一输入框）----------------
 void AdvisorView::BeginEdit()
 {
-    EnsureEditor();
-    if (!m_edit) return;
-    SetWindowTextW(m_edit, m_majorCode.c_str());
-    float s = (float)AppDpi() / 96.0f;
-    int L = (int)(m_majorRect.left * s), T = (int)(m_majorRect.top * s);
-    int W = (int)((m_majorRect.right - m_majorRect.left) * s);
-    int H = (int)((m_majorRect.bottom - m_majorRect.top) * s);
-    SetWindowPos(m_edit, nullptr, L, T, W > 1 ? W : 1, H > 1 ? H : 1, SWP_NOZORDER);
-    SendMessageW(m_edit, WM_SETREDRAW, FALSE, 0);
-    ShowWindow(m_edit, SW_SHOW);
-    SetFocus(m_edit);
-    int len = GetWindowTextLengthW(m_edit);
-    SendMessageW(m_edit, EM_SETSEL, (WPARAM)len, (LPARAM)len);
+    if (m_editing) CommitEdit();
     m_editing = true;
+    // 1×1 透明代理只收键盘 + IME，字段上无任何 GDI 子窗口（无白块）
+    m_edit.onEnter     = [this] { CommitEdit(); };
+    m_edit.onEsc       = [this] { CancelEdit(); };
+    m_edit.onKillFocus = [this] { CommitEdit(); };
+    m_edit.Begin(m_majorCode, false, 16.0f);
 }
 
 void AdvisorView::CommitEdit()
 {
     if (!m_editing) return;
-    std::wstring buf = ReadEditBuffer(m_edit);
+    std::wstring buf;
+    m_edit.End(true, buf);
     std::wstring digits;
     for (wchar_t c : buf) if (iswdigit((wint_t)c)) digits += c;
     if (!digits.empty()) {
@@ -94,15 +53,13 @@ void AdvisorView::CommitEdit()
         m_catCode   = digits.size() >= 4 ? digits.substr(0, 4) : L"";
         m_classCode = digits.size() >= 2 ? digits.substr(0, 2) : L"";
     }
-    ShowWindow(m_edit, SW_HIDE);
     m_editing = false;
     Recompute();
 }
 
 void AdvisorView::CancelEdit()
 {
-    if (!m_editing) return;
-    ShowWindow(m_edit, SW_HIDE);
+    m_edit.Cancel();
     m_editing = false;
 }
 
@@ -142,7 +99,6 @@ void AdvisorView::OnEnter()
 void AdvisorView::OnLeave()
 {
     if (m_editing) CancelEdit();
-    if (m_edit) ShowWindow(m_edit, SW_HIDE);
 }
 
 // ---------------- 布局 ----------------
@@ -150,6 +106,7 @@ void AdvisorView::Layout(const D2D1_RECT_F& area, Canvas& cv)
 {
     View::Layout(area, cv);
     m_area = area;
+    m_cvCached = &cv;
 
     float availW = area.right - area.left;
     float contentW = (std::min)(shape::kMaxWidth, availW - 72.0f);
@@ -244,9 +201,14 @@ void AdvisorView::Update(float dt, const Input& in)
 
     float mx = in.mouseX, my = in.mouseY + ScrollY();
 
-    // 编辑态：点击字段外即提交
-    if (m_editing) {
-        if (in.clicked && !InRect(m_majorRect, mx, my)) CommitEdit();
+    // 编辑态：鼠标先交给字段（点击定位光标 / 拖拽框选），点字段外才提交
+    if (m_editing && m_cvCached) {
+        TextStyle es; es.role = FontRole::Mono; es.size = 16.0f; es.vAlign = VAlign::Middle;
+        D2D1_RECT_F tbox{ m_majorRect.left + 8.0f, m_majorRect.top,
+                          m_majorRect.right - 6.0f, m_majorRect.bottom };
+        // 本视图绘制不随滚动平移（与 Paint 保持同一坐标口径），scrollY 固定 0
+        bool inside = m_edit.HandleMouse(in, *m_cvCached, tbox, es, 0.0f);
+        if (!inside && in.clicked) CommitEdit();
     }
 
     if (m_showDetail) {
@@ -338,9 +300,10 @@ void AdvisorView::PaintProfile(Canvas& cv)
     cv.FillRoundRect(m_majorRect, shape::kEdgeSoft, pal.paperLo);
     cv.StrokeRoundRect(m_majorRect, shape::kEdgeSoft, pal.rule, shape::kHair);
     if (m_editing) {
-        std::wstring buf = ReadEditBuffer(m_edit);
+        // v2 统一输入框：文字/光标/选区/IME 组合串全由 D3D 绘制
         TextStyle es; es.role = FontRole::Mono; es.size = 16.0f; es.vAlign = VAlign::Middle;
-        cv.Text(buf, { m_majorRect.left + 8.0f, m_majorRect.top, m_majorRect.right - 6.0f, m_majorRect.bottom }, es, pal.ink900);
+        m_edit.Paint(cv, { m_majorRect.left + 8.0f, m_majorRect.top, m_majorRect.right - 6.0f, m_majorRect.bottom },
+                     es, pal.ink900, L"", pal.ink300, 0.0f, 0.0f);
     } else {
         TextStyle es; es.role = FontRole::Mono; es.size = 16.0f; es.vAlign = VAlign::Middle;
         cv.Text(m_majorCode, { m_majorRect.left + 8.0f, m_majorRect.top, m_majorRect.right - 6.0f, m_majorRect.bottom }, es, pal.ink900);

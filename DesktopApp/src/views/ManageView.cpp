@@ -34,30 +34,6 @@ static const int kTagN = (int)(sizeof(kTags) / sizeof(kTags[0]));
 
 static const wchar_t* kGroupTitle[] = { L"工作日（每日固定）", L"周六专项", L"周日专项" };
 
-LRESULT CALLBACK ManageView::EditProc(HWND w, UINT msg, WPARAM wp, LPARAM lp)
-{
-    ManageView* self = (ManageView*)GetWindowLongPtrW(w, GWLP_USERDATA);
-    if (self) {
-        if (msg == WM_KEYDOWN) {
-            if (wp == VK_RETURN) { self->CommitEdit(); return 0; }
-            if (wp == VK_ESCAPE) { self->CancelEdit(); return 0; }
-        } else if (msg == WM_KILLFOCUS) {
-            self->CommitEdit();
-        } else if (msg == WM_SETFOCUS) {
-            int len = GetWindowTextLengthW(w);
-            SendMessageW(w, EM_SETSEL, (WPARAM)len, (LPARAM)len);  // 焦点时光标置文末
-        }
-    }
-    WNDPROC old = self ? self->m_editOld : nullptr;
-    LRESULT r = old ? CallWindowProcW(old, w, msg, wp, lp) : DefWindowProcW(w, msg, wp, lp);
-    // 隐藏隐藏代理 EDIT 的原生系统光标：我们用 D3D 自绘光标，
-    // 否则原生光标会在 1×1 代理所在的输入框左上角闪一下。
-    if (msg == WM_SETFOCUS || msg == WM_KEYDOWN || msg == WM_CHAR ||
-        msg == WM_IME_STARTCOMPOSITION || msg == WM_IME_COMPOSITION || msg == WM_IME_CHAR)
-        HideCaret(w);
-    return r;
-}
-
 // ============================================================
 void ManageView::OnEnter()
 {
@@ -75,40 +51,20 @@ void ManageView::OnLeave()
     if (m_editingOn) CancelEdit();
 }
 
-void ManageView::EnsureEditor()
-{
-    if (m_edit) return;
-    HWND parent = AppHwnd();
-    if (!parent) return;
-    // 不加 WS_EX_TRANSPARENT：编辑态要铺成输入框全尺寸收鼠标（点击定位/拖拽框选），
-    // 配合 WM_SETREDRAW(FALSE) 不绘制——文字/光标/选区全由 D3D 自绘。
-    m_edit = CreateWindowExW(0, L"EDIT", L"",
-                             WS_CHILD | ES_AUTOHSCROLL | ES_LEFT,
-                             0, 0, 10, 10, parent, nullptr,
-                             (HINSTANCE)GetWindowLongPtrW(parent, GWLP_HINSTANCE), nullptr);
-    if (!m_edit) return;
-    m_editOld = (WNDPROC)SetWindowLongPtrW(m_edit, GWLP_WNDPROC, (LONG_PTR)EditProc);
-    SetWindowLongPtrW(m_edit, GWLP_USERDATA, (LONG_PTR)this);
-    m_editFont = CreateFontW(-16, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-                             DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                             DEFAULT_QUALITY, DEFAULT_PITCH | FF_DONTCARE,
-                             L"Microsoft YaHei UI");
-    if (m_editFont) SendMessageW(m_edit, WM_SETFONT, (WPARAM)m_editFont, TRUE);
-    ShowWindow(m_edit, SW_HIDE);
-}
-
 void ManageView::BeginEdit(const FieldHit& fh)
 {
-    EnsureEditor();
-    if (!m_edit) return;
-    CommitEdit();   // 提交上一段
+    if (m_editingOn) CommitEdit();   // 收尾上一个字段
     m_editing = fh;
     m_editingOn = true;
-    // 自定义项字段背板是纯 paperHi，输入框背景与其一致 → 无缝
-    lj::SetEditBackdrop(AppPalette().paperHi);
+    // v2 统一输入框：1×1 透明代理只收键盘 + IME，字段上无任何 GDI 子窗口（无白块）；
+    // 文字/光标/选区/IME 组合串全由 D3D 绘制。
+    m_edit.onEnter     = [this] { CommitEdit(); };
+    m_edit.onEsc       = [this] { CancelEdit(); };
+    m_edit.onKillFocus = [this] { CommitEdit(); };
 
     std::wstring cur;
     if (fh.g == 3) {
+        if (fh.i < 0 || fh.i >= (int)m_milestones.size()) { m_editingOn = false; return; }
         auto& ms = m_milestones[fh.i];
         switch (fh.f) {
             case F_MLABEL: cur = ms.label; break;
@@ -116,8 +72,10 @@ void ManageView::BeginEdit(const FieldHit& fh)
             case F_MNOTE:  cur = ms.note; break;
         }
     } else {
-        auto& it = (fh.g == 0) ? m_bundle.daily[fh.i]
-                  : (fh.g == 1) ? m_bundle.sat[fh.i] : m_bundle.sun[fh.i];
+        auto* grp = (fh.g == 0) ? &m_bundle.daily
+                  : (fh.g == 1) ? &m_bundle.sat  : &m_bundle.sun;
+        if (fh.i < 0 || fh.i >= (int)grp->size()) { m_editingOn = false; return; }
+        auto& it = (*grp)[fh.i];
         switch (fh.f) {
             case F_TIME:   cur = it.slot; break;
             case F_TITLE:  cur = it.title; break;
@@ -126,20 +84,7 @@ void ManageView::BeginEdit(const FieldHit& fh)
             case F_FOLDER: cur = it.folder; break;
         }
     }
-    SetWindowTextW(m_edit, cur.c_str());
-
-    // 编辑框铺满字段全尺寸（内部处理鼠标点击定位/拖拽框选），
-    // 但 WM_SETREDRAW(FALSE) 禁止其自绘——可见文字/光标/选区全由 D3D 绘制，
-    // 不出现白块、不覆盖设计边框、字体与软件一致。
-    float s = (float)AppDpi() / 96.0f;
-    int L = (int)(fh.r.left * s), T = (int)(fh.r.top * s);
-    int W = (int)((fh.r.right - fh.r.left) * s), H = (int)((fh.r.bottom - fh.r.top) * s);
-    SetWindowPos(m_edit, nullptr, L, T, W > 1 ? W : 1, H > 1 ? H : 1, SWP_NOZORDER);
-    SendMessageW(m_edit, WM_SETREDRAW, FALSE, 0);
-    ShowWindow(m_edit, SW_SHOW);
-    SetFocus(m_edit);
-    int len = GetWindowTextLengthW(m_edit);
-    SendMessageW(m_edit, EM_SETSEL, (WPARAM)len, (LPARAM)len); // 光标置于文末
+    m_edit.Begin(cur, false, 13.0f);
 }
 
 void ManageView::DebugForceOpen()
@@ -155,45 +100,47 @@ void ManageView::DebugForceOpen()
 
 void ManageView::CommitEdit()
 {
-    if (!m_editingOn || !m_edit) { m_editingOn = false; return; }
-    auto& it = (m_editing.g == 0) ? m_bundle.daily[m_editing.i]
-              : (m_editing.g == 1) ? m_bundle.sat[m_editing.i] : m_bundle.sun[m_editing.i];
-    int n = GetWindowTextLengthW(m_edit);
-    std::wstring txt; txt.resize((size_t)n + 1);
-    GetWindowTextW(m_edit, &txt[0], n + 1);
-    txt.resize((size_t)n);
+    if (!m_editingOn) { m_editingOn = false; return; }
+    std::wstring txt;
+    m_edit.End(true, txt);
+    // 【闪退修复】旧实现 `auto& it = (g==0)?daily[i]:(g==1)?sat[i]:sun[i]`
+    //  在 g==3（关键倒计时）时三元链落到 sun[i]——sun 为空/过短即越界崩溃。
+    //  现按组分开取，并加下标保护。
     if (m_editing.g == 3) {
-        auto& ms = m_milestones[m_editing.i];
-        switch (m_editing.f) {
-            case F_MLABEL: ms.label = txt; break;
-            case F_MDATE:  {
-                int y = 2027, m = 1, d = 1;
-                if (swscanf_s(txt.c_str(), L"%d-%d-%d", &y, &m, &d) == 3) ms.date = { y, m, d };
-                break;
+        if (m_editing.i >= 0 && m_editing.i < (int)m_milestones.size()) {
+            auto& ms = m_milestones[m_editing.i];
+            switch (m_editing.f) {
+                case F_MLABEL: ms.label = txt; break;
+                case F_MDATE:  {
+                    int y = 2027, m = 1, d = 1;
+                    if (swscanf_s(txt.c_str(), L"%d-%d-%d", &y, &m, &d) == 3) ms.date = { y, m, d };
+                    break;
+                }
+                case F_MNOTE:  ms.note = txt; break;
             }
-            case F_MNOTE:  ms.note = txt; break;
+            m_changed = true;
         }
     } else {
-        switch (m_editing.f) {
-            case F_TIME:   it.slot = txt; break;
-            case F_TITLE:  it.title = txt; break;
-            case F_DUR:    { int v = 0; swscanf_s(txt.c_str(), L"%d", &v); it.minutes = v < 0 ? 0 : v; } break;
-            case F_LINK:   it.link = txt; break;
-            case F_FOLDER: it.folder = txt; break;
+        auto* grp = (m_editing.g == 0) ? &m_bundle.daily
+                  : (m_editing.g == 1) ? &m_bundle.sat  : &m_bundle.sun;
+        if (m_editing.i >= 0 && m_editing.i < (int)grp->size()) {
+            auto& it = (*grp)[m_editing.i];
+            switch (m_editing.f) {
+                case F_TIME:   it.slot = txt; break;
+                case F_TITLE:  it.title = txt; break;
+                case F_DUR:    { int v = 0; swscanf_s(txt.c_str(), L"%d", &v); it.minutes = v < 0 ? 0 : v; } break;
+                case F_LINK:   it.link = txt; break;
+                case F_FOLDER: it.folder = txt; break;
+            }
+            m_changed = true;
         }
     }
-    m_changed = true;
-    SendMessageW(m_edit, WM_SETREDRAW, TRUE, 0);   // 恢复自绘能力（隐藏后不再画）
-    ShowWindow(m_edit, SW_HIDE);
     m_editingOn = false;
 }
 
 void ManageView::CancelEdit()
 {
-    if (m_edit) {
-        SendMessageW(m_edit, WM_SETREDRAW, TRUE, 0);
-        ShowWindow(m_edit, SW_HIDE);
-    }
+    m_edit.Cancel();
     m_editingOn = false;
 }
 
@@ -509,7 +456,15 @@ void ManageView::Update(float dt, const Input& in)
     hitAny(m_btnExport); hitAny(m_btnImport);
     hitAny(m_msAdd);
 
-    if (m_editingOn && in.clicked) CommitEdit();   // 点空白处先提交
+    // 编辑态：鼠标先交给字段（点击定位光标 / 拖拽框选），点字段外才提交
+    if (m_editingOn && m_cvCached) {
+        TextStyle es; es.role = FontRole::Sans; es.size = 13.0f; es.vAlign = VAlign::Middle;
+        es.weight = DWRITE_FONT_WEIGHT_SEMI_BOLD;
+        D2D1_RECT_F tbox{ m_editing.r.left + 8.0f, m_editing.r.top,
+                          m_editing.r.right - 6.0f, m_editing.r.bottom };
+        bool inside = m_edit.HandleMouse(in, *m_cvCached, tbox, es, ScrollY());
+        if (!inside && in.clicked) CommitEdit();
+    }
 
     if (in.clicked) {
         // 页脚
@@ -615,18 +570,18 @@ void ManageView::Paint(Canvas& cv)
             case F_MNOTE:  ph = L"备注（可选）"; break;
             default:       ph = L"…"; break;
         }
-        // 编辑态：文字由 D3D 用软件字体绘制；EDIT 全尺寸但 SetRedraw(FALSE) 不自绘，
-        // 鼠标点击定位/拖拽框选由 EDIT 内部处理（EM_GETSEL），选区高亮由 D3D 补画
-        std::wstring shown = editing ? lj::ReadEditBuffer(m_edit) : text;
-        bool empty = shown.empty();
+        // 编辑态：文字/光标/选区/IME 组合串全由 D3D 绘制（1×1 透明代理，无白块）
         TextStyle fs; fs.role = FontRole::Sans; fs.size = 13.0f; fs.vAlign = VAlign::Middle;
         fs.weight = DWRITE_FONT_WEIGHT_SEMI_BOLD;
-        int caret = editing ? lj::EditCaretPos(m_edit) : -1;
-        int sa = -1, sb = -1;
-        if (editing) lj::EditSelRange(m_edit, sa, sb);
-        lj::PaintFieldEdit(cv, { r.left + 8.0f, r.top, r.right - 6.0f, r.bottom },
-                          fs, empty ? std::wstring(ph) : shown,
-                          empty ? pal.ink300 : pal.ink900, caret, 0.0f, sa, sb);
+        D2D1_RECT_F tbox{ r.left + 8.0f, r.top, r.right - 6.0f, r.bottom };
+        if (editing) {
+            m_edit.Paint(cv, tbox, fs, pal.ink900, ph, pal.ink300, 0.0f, s);
+        } else {
+            bool empty = text.empty();
+            lj::PaintFieldEdit(cv, tbox, fs,
+                              empty ? std::wstring(ph) : text,
+                              empty ? pal.ink300 : pal.ink900, -1, 0.0f, -1, -1);
+        }
     };
 
     for (int g = 0; g < 3; ++g) {

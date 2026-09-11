@@ -8,6 +8,7 @@
 // ============================================================
 #include "ui/View.h"
 #include "ui/FieldText.h"
+#include "ui/FieldEdit.h"
 #include "app/Store.h"
 #include "quiz/QuizStore.h"
 #include "quiz/QuizScheduler.h"
@@ -88,11 +89,9 @@ private:
     void BuildRows();
     void ReadKanban();
 
-    void EnsureEditor();
     void BeginEdit(SRow& r);
     void CommitEdit();
     void CancelEdit();
-    static LRESULT CALLBACK EditProc(HWND w, UINT m, WPARAM wp, LPARAM lp);
 
     void PaintToggle(Canvas& cv, const D2D1_RECT_F& r, bool on, const Palette& pal);
     void PaintStepper(Canvas& cv, SRow& r, const Palette& pal);
@@ -120,10 +119,8 @@ private:
     bool        m_caretOn = false;
     Canvas*     m_cv = nullptr;
 
-    // 隐藏 EDIT 代理（复用，逐个字段编辑）
-    HWND   m_edit = nullptr;
-    WNDPROC m_editOld = nullptr;
-    HFONT  m_editFont = nullptr;
+    // v2 统一输入框（1×1 透明代理 + 全 D3D 自绘，无白块；逐行复用）
+    FieldEdit m_edit;
     SRow*  m_active = nullptr;
     bool   m_editing = false;
     float  m_caretT = 0.0f;

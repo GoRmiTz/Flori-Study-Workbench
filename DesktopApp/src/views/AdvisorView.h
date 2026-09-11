@@ -7,6 +7,7 @@
 // ============================================================
 #include "ui/View.h"
 #include "ui/Widget.h"
+#include "ui/FieldEdit.h"
 #include "app/Data.h"
 #include "app/Store.h"
 #include "ui/FieldText.h"
@@ -53,12 +54,12 @@ private:
     std::vector<int> m_matchIdx;          // 匹配上的下标（已排序）
     bool m_loaded = false;
 
-    // ---- 专业代码编辑（隐藏 EDIT 代理，数字）----
+    // ---- 专业代码编辑（v2 统一输入框，数字）----
     bool m_editing = false;
-    HWND m_edit = nullptr; WNDPROC m_editOld = nullptr; HFONT m_editFont = nullptr;
+    FieldEdit m_edit;
     D2D1_RECT_F m_majorRect{};
-    static LRESULT CALLBACK EditProc(HWND, UINT, WPARAM, LPARAM);
-    void EnsureEditor(); void BeginEdit(); void CommitEdit(); void CancelEdit();
+    Canvas* m_cvCached = nullptr;
+    void BeginEdit(); void CommitEdit(); void CancelEdit();
 
     // ---- 控件 ----
     Button m_mockMinus, m_mockPlus, m_importBtn, m_backBtn;

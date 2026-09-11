@@ -126,6 +126,14 @@ std::wstring FieldEdit::Text() const
     return ReadEditBuffer(m_edit);
 }
 
+void FieldEdit::Clear()
+{
+    if (!m_edit || !m_active) return;
+    SetWindowTextW(m_edit, L"");
+    SendMessageW(m_edit, EM_SETSEL, 0, 0);
+    m_imeComp.clear(); m_imeCompCaret = 0;
+}
+
 // ============================================================
 //  每帧：绘制 + 代理摆放
 // ============================================================

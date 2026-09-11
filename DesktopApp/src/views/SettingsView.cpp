@@ -76,7 +76,6 @@ void SettingsView::OnEnter()
 void SettingsView::OnLeave()
 {
     if (m_editing) CancelEdit();
-    if (m_edit) ShowWindow(m_edit, SW_HIDE);
 }
 
 void SettingsView::Load()
@@ -186,6 +185,7 @@ void SettingsView::BuildRows()
 void SettingsView::Layout(const D2D1_RECT_F& area, Canvas& cv)
 {
     View::Layout(area, cv);
+    m_cv = &cv;
     m_area = area;
     if (m_rows.empty()) { Load(); BuildRows(); }
 
@@ -244,10 +244,14 @@ void SettingsView::Update(float dt, const Input& in)
     float mx = in.mouseX;
     float my = in.mouseY + ScrollY();
 
-    // 编辑态：点框外即提交并吞掉本次点击
-    if (m_editing && in.clicked && m_active && !InRect(m_active->box, mx, my)) {
-        CommitEdit();
-        return;
+    // 编辑态：鼠标先交给字段（点击定位光标 / 拖拽框选），点字段外才提交并吞掉本次点击
+    if (m_editing && m_active && m_cv) {
+        TextStyle tx; tx.role = FontRole::Sans; tx.size = 13.5f; tx.vAlign = VAlign::Middle;
+        bool inside = m_edit.HandleMouse(in, *m_cv, m_active->box, tx, ScrollY(), 10.0f);
+        if (!inside && in.clicked) {
+            CommitEdit();
+            return;
+        }
     }
 
     // 返回
@@ -281,72 +285,28 @@ void SettingsView::Update(float dt, const Input& in)
     }
 }
 
-// ---------------- 隐藏 EDIT 代理 ----------------
-LRESULT CALLBACK SettingsView::EditProc(HWND w, UINT msg, WPARAM wp, LPARAM lp)
-{
-    SettingsView* self = (SettingsView*)GetWindowLongPtrW(w, GWLP_USERDATA);
-    if (self) {
-        if (msg == WM_KEYDOWN) {
-            if (wp == VK_RETURN) { self->CommitEdit(); return 0; }
-            if (wp == VK_ESCAPE) { self->CancelEdit(); return 0; }
-        } else if (msg == WM_KILLFOCUS) {
-            self->CommitEdit();
-        }
-    }
-    WNDPROC old = self ? self->m_editOld : nullptr;
-    LRESULT r = old ? CallWindowProcW(old, w, msg, wp, lp) : DefWindowProcW(w, msg, wp, lp);
-    if (msg == WM_SETFOCUS || msg == WM_KEYDOWN || msg == WM_CHAR) HideCaret(w);
-    return r;
-}
-
-void SettingsView::EnsureEditor()
-{
-    if (m_edit) return;
-    HWND parent = AppHwnd();
-    if (!parent) return;
-    m_edit = CreateWindowExW(0, L"EDIT", L"", WS_CHILD | ES_AUTOHSCROLL | ES_LEFT,
-                             0, 0, 10, 10, parent, nullptr,
-                             (HINSTANCE)GetWindowLongPtrW(parent, GWLP_HINSTANCE), nullptr);
-    if (!m_edit) return;
-    m_editOld = (WNDPROC)SetWindowLongPtrW(m_edit, GWLP_WNDPROC, (LONG_PTR)EditProc);
-    SetWindowLongPtrW(m_edit, GWLP_USERDATA, (LONG_PTR)this);
-    m_editFont = CreateFontW(-15, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-                             DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                             DEFAULT_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Microsoft YaHei UI");
-    if (m_editFont) SendMessageW(m_edit, WM_SETFONT, (WPARAM)m_editFont, TRUE);
-    ShowWindow(m_edit, SW_HIDE);
-}
-
+// ---------------- 编辑（v2 统一输入框）----------------
 void SettingsView::BeginEdit(SRow& r)
 {
+    if (m_editing) CommitEdit();
     m_active = &r;
-    EnsureEditor();
-    if (!m_edit) { m_active = nullptr; return; }
-    std::wstring cur = r.pStr ? *r.pStr : L"";
-    SetWindowTextW(m_edit, cur.c_str());
-
-    float s = (float)AppDpi() / 96.0f;
-    int L = (int)(r.box.left * s);
-    int T = (int)((r.box.top - ScrollY()) * s);
-    int W = (int)((r.box.right - r.box.left) * s);
-    int H = (int)((r.box.bottom - r.box.top) * s);
-    SetWindowPos(m_edit, nullptr, L, T, (W > 1 ? W : 1), (H > 1 ? H : 1), SWP_NOZORDER);
-    SendMessageW(m_edit, WM_SETREDRAW, FALSE, 0);
-    SetEditBackdrop(AppPalette().paperLo);   // 与文本框底色一致，融入卡片
-    ShowWindow(m_edit, SW_SHOW);
-    SetFocus(m_edit);
-    int len = GetWindowTextLengthW(m_edit);
-    SendMessageW(m_edit, EM_SETSEL, (WPARAM)len, (LPARAM)len);
     m_editing = true;
+    // 1×1 透明代理只收键盘 + IME，字段上无任何 GDI 子窗口（无白块）；
+    // 文字/光标/选区/IME 组合串全由 D3D 绘制。
+    m_edit.onEnter     = [this] { CommitEdit(); };
+    m_edit.onEsc       = [this] { CancelEdit(); };
+    m_edit.onKillFocus = [this] { CommitEdit(); };
+    std::wstring cur = r.pStr ? *r.pStr : L"";
+    m_edit.Begin(cur, r.password, 13.5f);
     m_caretT = 0.0f;
 }
 
 void SettingsView::CommitEdit()
 {
     if (!m_editing) { m_active = nullptr; return; }
-    if (m_edit && m_active) {
-        std::wstring buf = ReadEditBuffer(m_edit);
-        if (m_active->password) ImeCancelComposition(m_edit);
+    std::wstring buf;
+    m_edit.End(true, buf);
+    if (m_active) {
         switch (m_active->tag) {
             case TAG_FROM: { int m = 0; if (ParseHM(buf, m)) m_kb.activeFrom = m; break; }
             case TAG_TO:   { int m = 0; if (ParseHM(buf, m)) m_kb.activeTo = m; break; }
@@ -360,7 +320,6 @@ void SettingsView::CommitEdit()
                 if (m_active->pStr) *m_active->pStr = buf;
                 break;
         }
-        ShowWindow(m_edit, SW_HIDE);
     }
     // 重算显示字符串（HH:MM / 数值）
     m_fromStr = FormatHM(m_kb.activeFrom);
@@ -374,10 +333,7 @@ void SettingsView::CommitEdit()
 
 void SettingsView::CancelEdit()
 {
-    if (m_edit && m_editing) {
-        if (m_active && m_active->password) ImeCancelComposition(m_edit);
-        ShowWindow(m_edit, SW_HIDE);
-    }
+    m_edit.Cancel();
     m_editing = false;
     m_active = nullptr;
 }
@@ -471,17 +427,8 @@ void SettingsView::PaintTextBox(Canvas& cv, SRow& r, const Palette& pal)
     TextStyle ts; ts.role = FontRole::Sans; ts.size = 13.5f; ts.vAlign = VAlign::Middle;
 
     if (editingThis) {
-        std::wstring buf = ReadEditBuffer(m_edit);
-        int caret = EditCaretPos(m_edit);
-        int selA = 0, selB = 0; EditSelRange(m_edit, selA, selB);
-        std::wstring comp; int compCaret = 0;
-        bool ime = ImeReadComposition(m_edit, comp, compCaret);
-        if (ime) {
-            float colX = PaintFieldEditIme(cv, tbox, ts, buf, caret, comp, compCaret, pal.ink900, 0.0f);
-            ImeSetCandidatePos(m_edit, colX - box.left, box.bottom - box.top, AppDpi());
-        } else {
-            PaintFieldEdit(cv, tbox, ts, buf, pal.ink900, m_caretOn ? caret : -1, 0.0f, selA, selB);
-        }
+        // v2 统一输入框：文字/光标/选区/IME 组合串全由 D3D 绘制（1×1 透明代理）
+        m_edit.Paint(cv, tbox, ts, pal.ink900, L"点击填写\u2026", pal.ink300, 0.0f, ScrollY());
     } else {
         std::wstring disp;
         if (r.password) disp = (r.pStr && !r.pStr->empty()) ? MaskSecret(*r.pStr) : L"";
@@ -496,7 +443,6 @@ void SettingsView::DebugForcePreview()
     if (m_rows.empty()) { Load(); BuildRows(); }
     m_editing = false;
     m_active = nullptr;
-    if (m_edit) ShowWindow(m_edit, SW_HIDE);
 }
 
 } // namespace lj

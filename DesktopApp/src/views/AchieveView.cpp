@@ -73,77 +73,34 @@ static Date ParseYMD(const std::wstring& s)
     return d;
 }
 
-// ---------------- 隐藏 EDIT 代理（契约名称 / 规则）----------------
-LRESULT CALLBACK AchieveView::EditProc(HWND w, UINT msg, WPARAM wp, LPARAM lp)
-{
-    AchieveView* self = (AchieveView*)GetWindowLongPtrW(w, GWLP_USERDATA);
-    if (self) {
-        if (msg == WM_KEYDOWN) {
-            if (wp == VK_RETURN) { self->CommitEdit(); return 0; }
-            if (wp == VK_ESCAPE) { self->CancelEdit(); return 0; }
-        } else if (msg == WM_KILLFOCUS) {
-            self->CommitEdit();
-        }
-    }
-    WNDPROC old = self ? self->m_editOld : nullptr;
-    LRESULT r = old ? CallWindowProcW(old, w, msg, wp, lp) : DefWindowProcW(w, msg, wp, lp);
-    if (msg == WM_SETFOCUS || msg == WM_KEYDOWN || msg == WM_CHAR) HideCaret(w);
-    return r;
-}
-
-void AchieveView::EnsureEditor()
-{
-    if (m_edit) return;
-    HWND parent = AppHwnd();
-    if (!parent) return;
-    m_edit = CreateWindowExW(0, L"EDIT", L"", WS_CHILD | ES_AUTOHSCROLL | ES_LEFT | ES_MULTILINE,
-                             0, 0, 10, 10, parent, nullptr,
-                             (HINSTANCE)GetWindowLongPtrW(parent, GWLP_HINSTANCE), nullptr);
-    if (!m_edit) return;
-    m_editOld = (WNDPROC)SetWindowLongPtrW(m_edit, GWLP_WNDPROC, (LONG_PTR)EditProc);
-    SetWindowLongPtrW(m_edit, GWLP_USERDATA, (LONG_PTR)this);
-    m_editFont = CreateFontW(-16, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-                             DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                             DEFAULT_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Microsoft YaHei UI");
-    if (m_editFont) SendMessageW(m_edit, WM_SETFONT, (WPARAM)m_editFont, TRUE);
-    ShowWindow(m_edit, SW_HIDE);
-}
-
+// ---------------- 编辑（v2 统一输入框：契约名称 / 规则）----------------
 void AchieveView::BeginEdit(int field)
 {
-    EnsureEditor();
-    if (!m_edit) return;
+    if (m_editing) CommitEdit();
     m_editField = field;
-    std::wstring cur = (field == 1) ? m_pactName : m_pactRule;
-    SetWindowTextW(m_edit, cur.c_str());
-    const D2D1_RECT_F& r = (field == 1) ? m_pactNameRect : m_pactRuleRect;
-    float s = (float)AppDpi() / 96.0f;
-    int L = (int)(r.left * s), T = (int)(r.top * s);
-    int W = (int)((r.right - r.left) * s);
-    int H = (int)((r.bottom - r.top) * s);
-    SetWindowPos(m_edit, nullptr, L, T, W > 1 ? W : 1, H > 1 ? H : 1, SWP_NOZORDER);
-    SendMessageW(m_edit, WM_SETREDRAW, FALSE, 0);
-    ShowWindow(m_edit, SW_SHOW);
-    SetFocus(m_edit);
-    int len = GetWindowTextLengthW(m_edit);
-    SendMessageW(m_edit, EM_SETSEL, (WPARAM)len, (LPARAM)len);
     m_editing = true;
+    // 1×1 透明代理只收键盘 + IME，字段上无任何 GDI 子窗口（无白块）
+    m_edit.onEnter     = [this] { CommitEdit(); };
+    m_edit.onEsc       = [this] { CancelEdit(); };
+    m_edit.onKillFocus = [this] { CommitEdit(); };
+    std::wstring cur = (field == 1) ? m_pactName : m_pactRule;
+    m_edit.Begin(cur, false, 15.0f);
 }
 
 void AchieveView::CommitEdit()
 {
     if (!m_editing) return;
-    std::wstring buf = ReadEditBuffer(m_edit);
+    std::wstring buf;
+    m_edit.End(true, buf);
     if (m_editField == 1) m_pactName = buf;
     else if (m_editField == 2) m_pactRule = buf;
-    ShowWindow(m_edit, SW_HIDE);
     m_editing = false;
 }
 
 void AchieveView::CancelEdit()
 {
     if (!m_editing) return;
-    ShowWindow(m_edit, SW_HIDE);
+    m_edit.Cancel();
     m_editing = false;
 }
 
@@ -230,7 +187,6 @@ void AchieveView::OnEnter()
 void AchieveView::OnLeave()
 {
     if (m_editing) CancelEdit();
-    if (m_edit) ShowWindow(m_edit, SW_HIDE);
 }
 
 // ---------------- 布局 ----------------
@@ -238,6 +194,7 @@ void AchieveView::Layout(const D2D1_RECT_F& area, Canvas& cv)
 {
     View::Layout(area, cv);
     m_area = area;
+    m_cvCached = &cv;
 
     float availW = area.right - area.left;
     float contentW = (std::min)(shape::kMaxWidth, availW - 72.0f);
@@ -382,10 +339,13 @@ void AchieveView::Update(float dt, const Input& in)
 
     float mx = in.mouseX, my = in.mouseY + ScrollY();
 
-    // 编辑态：点击字段外即提交
-    if (m_editing) {
-        if (in.clicked && !InRect(m_pactNameRect, mx, my) && !InRect(m_pactRuleRect, mx, my))
-            CommitEdit();
+    // 编辑态：鼠标先交给字段（点击定位光标 / 拖拽框选），点字段外才提交
+    if (m_editing && m_cvCached) {
+        TextStyle es; es.role = FontRole::Sans; es.size = 15.0f; es.vAlign = VAlign::Middle;
+        const D2D1_RECT_F& r = (m_editField == 1) ? m_pactNameRect : m_pactRuleRect;
+        D2D1_RECT_F tbox{ r.left + 8.0f, r.top, r.right - 6.0f, r.bottom };
+        bool inside = m_edit.HandleMouse(in, *m_cvCached, tbox, es, ScrollY());
+        if (!inside && in.clicked) CommitEdit();
     }
 
     UpdateWidgets(m_widgets, dt, in);
@@ -474,14 +434,12 @@ void AchieveView::Paint(Canvas& cv)
     else PaintF4(cv);
 
     if (m_editing) {
-        // 编辑时在字段上直接画当前缓冲文字（EDIT 代理承载 IME）
-        std::wstring buf = ReadEditBuffer(m_edit);
+        // 编辑时在字段上直接绘制缓冲文字/光标/选区/IME 组合串（v2 统一输入框）
         const auto& pal = cv.Pal();
         TextStyle es; es.role = FontRole::Sans; es.size = 15.0f; es.vAlign = VAlign::Middle;
-        if (m_editField == 1)
-            cv.Text(buf.empty() ? L"" : buf, { m_pactNameRect.left + 8.0f, m_pactNameRect.top, m_pactNameRect.right - 6.0f, m_pactNameRect.bottom }, es, pal.ink900);
-        else if (m_editField == 2)
-            cv.Text(buf.empty() ? L"" : buf, { m_pactRuleRect.left + 8.0f, m_pactRuleRect.top, m_pactRuleRect.right - 6.0f, m_pactRuleRect.bottom }, es, pal.ink900);
+        const D2D1_RECT_F& r = (m_editField == 1) ? m_pactNameRect : m_pactRuleRect;
+        m_edit.Paint(cv, { r.left + 8.0f, r.top, r.right - 6.0f, r.bottom },
+                     es, pal.ink900, L"", pal.ink300, 0.0f, ScrollY());
     }
 
     if (m_toast) {

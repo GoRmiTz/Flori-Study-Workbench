@@ -10,7 +10,6 @@
 #include <vector>
 #include "app/Data.h"
 #include "app/AccountStore.h"
-#include "kanban/KanbanTypes.h"
 
 namespace lj {
 
@@ -59,11 +58,6 @@ struct AppSettings
     bool        reviewNudge = true;      // 是否开启每日自动提醒（默认开）
     int         reviewNudgeHour = 21;    // 提醒时刻（24h，默认 21:00 收工前）
     std::wstring reviewNudgeLast;        // 已提醒日期 YYYY-MM-DD（跨重启去重）
-
-    // ---- 看板娘（绿井/lvjing，桌面独占模块）----
-    // 运行配置存此处，落盘 settings.json（按账户隔离）。
-    // 红线：apiKey 仅本地面板配置，不硬编码、不进仓库。
-    kanban::KanbanSettings kanban;
 };
 
 // ---------------- 每日复盘（journal.json）----------------
@@ -242,7 +236,6 @@ private:
     std::wstring FocusFilePath() const;
     std::wstring ItemsFilePath() const;
     std::wstring SettingsFilePath() const;
-    std::wstring KanbanAIPath() const;   // 看板娘 AI 凭据本地独立文件（不参与云端同步）
     std::wstring JournalFilePath() const;
     std::wstring RhythmFilePath() const;
     std::wstring MilestonesFilePath() const;

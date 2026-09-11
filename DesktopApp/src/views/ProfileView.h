@@ -10,6 +10,7 @@
 // ============================================================
 #include "ui/View.h"
 #include "ui/Widget.h"
+#include "ui/FieldEdit.h"
 #include "app/Data.h"
 #include "app/Store.h"
 #include "app/AccountStore.h"
@@ -46,13 +47,11 @@ private:
     void ReloadAll();
     void SaveProfile();
     void TrySyncProfile();   // 本地保存后异步上推云端（P1-1：离线/超限安全，不弹错）
-    void EnsureEditor();
     void BeginEdit(int field, const D2D1_RECT_F& r);
     void DebugForceOpen() override;   // 截图自检：强制打开简介编辑
     void CommitEdit();
     void CancelEdit();
     void CycleGender();
-    static LRESULT CALLBACK EditProc(HWND w, UINT msg, WPARAM wp, LPARAM lp);
 
     // ---- 数据 ----
     AccountProfile m_profile{};
@@ -82,12 +81,12 @@ private:
     Button m_backBtn;
     std::vector<Widget*> m_widgets;
 
-    // ---- 编辑器 ----
-    HWND    m_edit = nullptr;
-    WNDPROC m_editOld = nullptr;
-    HFONT   m_editFont = nullptr;
+    // ---- 编辑器（v2 统一输入框：1×1 透明代理 + 全 D3D 自绘，无白块）----
+    FieldEdit m_edit;
     int     m_editField = -1;
     bool    m_editingOn = false;
+    D2D1_RECT_F EditTextBox() const;   // 当前编辑字段的文字框（Update 与 Paint 共用，保证一致）
+    Canvas* m_cvCached = nullptr;
 
     float m_t = 0.0f;
     std::wstring m_toast;

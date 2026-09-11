@@ -8,6 +8,7 @@
 // ============================================================
 #include "ui/View.h"
 #include "ui/Widget.h"
+#include "ui/FieldEdit.h"
 #include "app/Data.h"
 #include "app/Store.h"
 #include "ui/FieldText.h"
@@ -76,12 +77,12 @@ private:
     std::vector<D2D1_RECT_F> m_pactDelRects;
     int m_todayFocus = 0;    // 今日专注分钟（F4 自评进度）
 
-    // ---- 编辑（隐藏 EDIT 代理：契约名称 / 规则）----
+    // ---- 编辑（v2 统一输入框：契约名称 / 规则）----
     bool m_editing = false; int m_editField = 0;   // 1 名称 / 2 规则
-    HWND m_edit = nullptr; WNDPROC m_editOld = nullptr; HFONT m_editFont = nullptr;
+    FieldEdit m_edit;
+    Canvas* m_cvCached = nullptr;
     D2D1_RECT_F m_pactNameRect{}, m_pactRuleRect{};
-    static LRESULT CALLBACK EditProc(HWND, UINT, WPARAM, LPARAM);
-    void EnsureEditor(); void BeginEdit(int field); void CommitEdit(); void CancelEdit();
+    void BeginEdit(int field); void CommitEdit(); void CancelEdit();
 
     // ---- 控件 ----
     Button m_newPactBtn, m_createPactBtn, m_cancelPactBtn;

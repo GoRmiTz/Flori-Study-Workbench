@@ -349,14 +349,6 @@ std::wstring CheckinStore::SettingsFilePath() const
     return AccountStore::Instance().CurrentRoot() + L"settings.json";
 }
 
-std::wstring CheckinStore::KanbanAIPath() const
-{
-    // 看板娘 AI 凭据单独落盘，刻意不参与云端同步：云端 settings.json 的 kanban 段
-    // 可能是空凭据（演示账户早期上推的脏数据），一旦回写本地就会把真实 Key 覆盖掉，
-    // 导致「DeepSeek 接了又失效」。此文件本地独占，LoadSettings 时以它为准覆盖 settings 段。
-    return AccountStore::Instance().CurrentRoot() + L"kanban_ai.json";
-}
-
 AppSettings CheckinStore::LoadSettings()
 {
     AppSettings s;
@@ -415,43 +407,6 @@ AppSettings CheckinStore::LoadSettings()
     if (auto* rh = JGet(v, "reviewNudgeHour")) s.reviewNudgeHour = (int)rh->num;
     if (auto* rl = JGet(v, "reviewNudgeLast")) s.reviewNudgeLast = U2W(rl->str);
 
-    // 看板娘（绿井/lvjing）运行配置
-    if (auto* kb = JGet(v, "kanban")) {
-        if (auto* e = JGet(*kb, "enabled"))   s.kanban.enabled = (e->num != 0);
-        if (auto* x = JGet(*kb, "x"))         s.kanban.x = (int)x->num;
-        if (auto* y = JGet(*kb, "y"))         s.kanban.y = (int)y->num;
-        if (auto* z = JGet(*kb, "zoom"))       s.kanban.zoom = (float)z->num;
-        if (auto* p = JGet(*kb, "persona"))   s.kanban.persona = (kanban::Persona)(int)p->num;
-        if (auto* d = JGet(*kb, "dnd"))       s.kanban.dnd = (d->num != 0);
-        if (auto* af = JGet(*kb, "activeFrom")) s.kanban.activeFrom = (int)af->num;
-        if (auto* at = JGet(*kb, "activeTo"))   s.kanban.activeTo = (int)at->num;
-        if (auto* tb = JGet(*kb, "dailyTokenBudget")) s.kanban.dailyTokenBudget = (int)tb->num;
-        if (auto* ab = JGet(*kb, "apiBase"))   s.kanban.apiBase = U2W(ab->str);
-        if (auto* ak = JGet(*kb, "apiKey"))    s.kanban.apiKey = U2W(ak->str);
-        if (auto* mo = JGet(*kb, "model"))     s.kanban.model = U2W(mo->str);
-        if (auto* fr = JGet(*kb, "firstRun"))  s.kanban.firstRun = (fr->num != 0);
-    }
-
-    // 看板娘 AI 凭据以本地独立文件 kanban_ai.json 为准（覆盖 settings.json 段）。
-    // 该文件不参与云端同步，故即使云端把 settings.json 的 kanban 段回写成空，
-    // 这里的真实 Key 仍生效，解决「DeepSeek 接了又失效」。
-    {
-        std::string ai;
-        if (ReadFileRaw(KanbanAIPath(), ai) && !ai.empty()) {
-            using namespace lj::json;
-            Parser ap(ai.data(), ai.size());
-            JVal av = ap.parse();
-            if (av.type == JVal::Obj) {
-                auto get = [&](const char* k) -> const JVal* {
-                    auto it = av.obj.find(k); return it == av.obj.end() ? nullptr : &it->second;
-                };
-                if (auto* e  = get("enabled")) s.kanban.enabled = (e->num != 0);
-                if (auto* ab = get("apiBase")) s.kanban.apiBase = U2W(ab->str);
-                if (auto* ak = get("apiKey"))  s.kanban.apiKey  = U2W(ak->str);
-                if (auto* mo = get("model"))   s.kanban.model   = U2W(mo->str);
-            }
-        }
-    }
     return s;
 }
 
@@ -490,37 +445,10 @@ void CheckinStore::SaveSettings(const AppSettings& s)
     // F-D7 增强：复盘每日自动 nudge 配置
     out += "  \"reviewNudge\": " + std::string(s.reviewNudge ? "1" : "0") + ",\n";
     out += "  \"reviewNudgeHour\": " + std::to_string(s.reviewNudgeHour) + ",\n";
-    out += "  \"reviewNudgeLast\": " + JQuote(W2U(s.reviewNudgeLast)) + ",\n";
-    // 看板娘（绿井/lvjing）运行配置
-    out += "  \"kanban\": {\n";
-    out += "    \"enabled\": " + std::string(s.kanban.enabled ? "1" : "0") + ",\n";
-    out += "    \"x\": " + std::to_string(s.kanban.x) + ", \"y\": " + std::to_string(s.kanban.y) + ",\n";
-    out += "    \"zoom\": " + std::to_string(s.kanban.zoom) + ",\n";
-    out += "    \"persona\": " + std::to_string((int)s.kanban.persona) + ",\n";
-    out += "    \"dnd\": " + std::string(s.kanban.dnd ? "1" : "0") + ",\n";
-    out += "    \"activeFrom\": " + std::to_string(s.kanban.activeFrom) + ", \"activeTo\": " + std::to_string(s.kanban.activeTo) + ",\n";
-    out += "    \"dailyTokenBudget\": " + std::to_string(s.kanban.dailyTokenBudget) + ",\n";
-    out += "    \"apiBase\": " + JQuote(W2U(s.kanban.apiBase)) + ",\n";
-    out += "    \"apiKey\": " + JQuote(W2U(s.kanban.apiKey)) + ",\n";
-    out += "    \"model\": " + JQuote(W2U(s.kanban.model)) + ",\n";
-    out += "    \"firstRun\": " + std::string(s.kanban.firstRun ? "1" : "0") + "\n";
-    out += "  }\n";
+    out += "  \"reviewNudgeLast\": " + JQuote(W2U(s.reviewNudgeLast)) + "\n";
     out += "}\n";
     WriteFileRaw(SettingsFilePath(), out);
     Cloud::Instance().MarkDirty();   // 写盘即打脏：后台线程防抖后静默上推
-
-    // 看板娘 AI 凭据额外落盘到本地独立文件 kanban_ai.json（不参与云端同步）。
-    // 即便云端把 settings.json 的 kanban 段回写成空，本文件保留真实 Key，
-    // 下次 LoadSettings 仍以它为准覆盖回来。
-    {
-        std::string ai = "{\n";
-        ai += "  \"enabled\": " + std::string(s.kanban.enabled ? "1" : "0") + ",\n";
-        ai += "  \"apiBase\": " + JQuote(W2U(s.kanban.apiBase)) + ",\n";
-        ai += "  \"apiKey\": "  + JQuote(W2U(s.kanban.apiKey))  + ",\n";
-        ai += "  \"model\": "   + JQuote(W2U(s.kanban.model))   + "\n";
-        ai += "}\n";
-        WriteFileRaw(KanbanAIPath(), ai);
-    }
 }
 
 // ---------------- 关键倒计时（milestones.json）----------------

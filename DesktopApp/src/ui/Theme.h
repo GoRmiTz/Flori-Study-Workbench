@@ -136,12 +136,15 @@ namespace shape {
 
 // ---------------- 字体 ----------------
 namespace font {
-    // DirectWrite 按族名查找；写多个候选由 Canvas 逐个探测
+    // DirectWrite 按族名查找；写多个候选由 Canvas 逐个探测。
+    // 授权策略：候选只含 OFL 开源字体（思源/Noto，用户自行安装则优先采用）
+    // 与 Windows 系统自带字体（随系统授权，不随本仓库分发），不引入任何
+    // 需独立授权的第三方字体。仓库本身不含任何字体文件。
     inline const wchar_t* kSerifCandidates[] = {
-        L"Source Han Serif SC", L"Noto Serif SC", L"Songti SC", L"SimSun", L"宋体"
+        L"Noto Serif SC", L"Source Han Serif SC", L"Songti SC", L"SimSun", L"宋体"
     };
     inline const wchar_t* kSansCandidates[] = {
-        L"PingFang SC", L"HarmonyOS Sans SC", L"Source Han Sans SC",
+        L"Noto Sans SC", L"Source Han Sans SC",
         L"Microsoft YaHei UI", L"Microsoft YaHei", L"微软雅黑"
     };
     inline const wchar_t* kMonoCandidates[] = {

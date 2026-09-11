@@ -11,6 +11,7 @@
 // ============================================================
 #include "ui/View.h"
 #include "ui/Widget.h"
+#include "ui/FieldEdit.h"
 #include "app/Data.h"
 #include "app/Store.h"
 #include "core/Hwnd.h"
@@ -37,7 +38,6 @@ private:
     struct RowBtn   { D2D1_RECT_F r; int g; int i; int kind; }; // kind 0 up 1 down 2 del 3 tag · 4 urgent 5 ms-del
     struct RowGeom  { float top = 0, h = 0, y1 = 0, y2 = 0, y3 = 0; }; // 每行几何：Layout 计算后供 Paint 复用，根绝 Layout/Paint 不一致
 
-    void EnsureEditor();
     void CommitEdit();
     void CancelEdit();
     void BeginEdit(const FieldHit& fh);
@@ -47,8 +47,6 @@ private:
     void DoExport();     // 导出当前账户全部档案为单文件 JSON
     void DoImport();     // 从备份文件恢复到当前账户
     void Toast(const std::wstring& msg, bool bad);
-
-    static LRESULT CALLBACK EditProc(HWND w, UINT msg, WPARAM wp, LPARAM lp);
 
     ChecklistBundle m_bundle;
     std::vector<Milestone> m_milestones;   // 关键倒计时（g=3 分组）
@@ -70,10 +68,8 @@ private:
     std::vector<RowGeom> m_rowGeom[3];      // daily/sat/sun 每组每行的几何（Paint 复用，避免错位）
     std::vector<RowGeom> m_msGeom;          // 关键倒计时每行的几何
 
-    // 编辑器（Win32 EDIT 承载）
-    HWND   m_edit = nullptr;
-    WNDPROC m_editOld = nullptr;
-    HFONT  m_editFont = nullptr;
+    // 编辑器（v2 统一输入框：1×1 透明代理 + 全 D3D 自绘，无白块）
+    FieldEdit m_edit;
     FieldHit m_editing{};
     bool   m_editingOn = false;
 
