@@ -270,17 +270,21 @@ void TopBar::Update(float dt, const Input& in, const std::wstring& currentRoute,
     m_accountAnim += (targetA - m_accountAnim) * (1.0f - expf(-dt * 14.0f));
     if (m_accountAnim < 0.004f && !m_accountOpen) m_accountAnim = 0.0f;
 
-    // 指示线跟随活动标签
+    // 指示线跟随活动标签；不在任何导航页（登录 / 设置 / 个人 / 管理等）时收起，
+    // 否则会残留在上一次的标签下方，看着像「下标停在别处」。
+    bool anyActive = false;
     for (auto& t : m_tabs) {
         if (t.active) {
             float w = t.Width() * 0.42f;
             float cx = (t.bounds.left + t.bounds.right) * 0.5f;
-            if (!m_indInit) { m_indX.Snap(cx); m_indW.Snap(w); m_indInit = true; }
+            if (!m_indInit) { m_indX.Snap(cx); m_indW.Snap(0.0f); m_indInit = true; }
             m_indX.target = cx;
             m_indW.target = w;
+            anyActive = true;
             break;
         }
     }
+    if (!anyActive && m_indInit) m_indW.target = 0.0f;   // 宽度收拢到 0 → 指示线隐去
     m_indX.Update(dt);
     m_indW.Update(dt);
 }
@@ -328,8 +332,8 @@ void TopBar::Paint(Canvas& cv, bool chromeOnly)
     // ---- 导航 ----
     for (auto& t : m_tabs) t.Paint(cv);
 
-    // 活动指示线
-    if (m_indInit) {
+    // 活动指示线（无活动标签时宽度为 0，不画）
+    if (m_indInit && m_indW.value > 0.5f) {
         cv.Line(m_indX.value - m_indW.value, r.bottom - 8.0f,
                 m_indX.value + m_indW.value, r.bottom - 8.0f, pal.seal, 2.0f);
     }

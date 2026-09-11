@@ -104,6 +104,53 @@ void AchieveView::CancelEdit()
     m_editing = false;
 }
 
+// ---------------- 组队：队友名输入（v2 统一输入框）----------------
+void AchieveView::BeginMateEdit(int pactIdx)
+{
+    if (m_editing) CommitEdit();
+    m_matePactIdx = pactIdx;
+    m_mateEditing = true;
+    m_mateName.clear();
+    m_mateEdit.onEnter     = [this] { CommitMateEdit(); };
+    m_mateEdit.onEsc       = [this] { CancelMateEdit(); };
+    m_mateEdit.onKillFocus = [this] { CommitMateEdit(); };
+    m_mateEdit.Begin(L"", false, 13.0f);
+}
+
+void AchieveView::CommitMateEdit()
+{
+    if (!m_mateEditing) return;
+    std::wstring name;
+    m_mateEdit.End(true, name);
+    // 去首尾空白
+    size_t a = 0, b = name.size();
+    while (a < b && (name[a] == L' ' || name[a] == L'\t')) a++;
+    while (b > a && (name[b - 1] == L' ' || name[b - 1] == L'\t')) b--;
+    name = name.substr(a, b - a);
+    m_mateEditing = false;
+
+    int idx = m_matePactIdx;
+    m_matePactIdx = -1;
+    if (name.empty() || idx < 0 || idx >= (int)m_pacts.size()) return;
+
+    auto& mem = m_pacts[idx].members;
+    for (const auto& m : mem)
+        if (m.name == name) { m_toast = true; m_toastT = 2.2f; m_toastMsg = L"「" + name + L"」已在这份契约里"; return; }
+
+    PactMember pm; pm.name = name; pm.isSelf = false; pm.progressMin = 0;
+    mem.push_back(pm);
+    SavePacts();
+    m_toast = true; m_toastT = 2.2f; m_toastMsg = L"已邀请队友「" + name + L"」";
+}
+
+void AchieveView::CancelMateEdit()
+{
+    if (!m_mateEditing) return;
+    m_mateEdit.Cancel();
+    m_mateEditing = false;
+    m_matePactIdx = -1;
+}
+
 // ---------------- 生命周期 ----------------
 void AchieveView::OnEnter()
 {
@@ -187,6 +234,26 @@ void AchieveView::OnEnter()
 void AchieveView::OnLeave()
 {
     if (m_editing) CancelEdit();
+    if (m_mateEditing) CancelMateEdit();
+}
+
+// 截图自检：切到「契约 · 组队」页，便于无头出图核对布局
+void AchieveView::DebugForcePreview()
+{
+    m_tab = 1;
+    if (m_pacts.empty()) {
+        // 造一条示例契约，校验成员区（自己 + 队友）的排版
+        Pact p;
+        p.id = L"pact_demo";
+        p.name = L"示例契约 · 每天专注 60 分钟";
+        p.rule = L"每日专注备考，不刷手机";
+        p.created = FormatDate(Today());
+        p.days = 21; p.targetMinPerDay = 60;
+        PactMember self; self.name = L"我"; self.isSelf = true; self.progressMin = 0;
+        PactMember mate; mate.name = L"阿岚"; mate.isSelf = false; mate.progressMin = 30;
+        p.members.push_back(self); p.members.push_back(mate);
+        m_pacts.push_back(p);
+    }
 }
 
 // ---------------- 布局 ----------------
@@ -229,6 +296,13 @@ void AchieveView::Layout(const D2D1_RECT_F& area, Canvas& cv)
                 m_badgeRects.push_back({ ix + c * (colW + gap), gridTop + r * (rowH + gap),
                                          ix + c * (colW + gap) + colW, gridTop + r * (rowH + gap) + rowH });
             }
+        }
+
+        // 连续里程碑卡（3 / 7 / 21 / 50 / 100 天阶梯）
+        {
+            D2D1_RECT_F scBlock = flow.block(8.0f + 118.0f + 24.0f);
+            float scTop = scBlock.top + 8.0f;
+            m_streakCard = { x0, scTop, x0 + contentW, scTop + 118.0f };
         }
 
         // 年度回顾卡
@@ -306,20 +380,54 @@ void AchieveView::Layout(const D2D1_RECT_F& area, Canvas& cv)
             m_widgets.push_back(&m_backBtn);
         }
 
-        // 契约列表
+        // 契约列表（含成员区：队友横排 + 邀请 / 加时 / 移除）
         m_pactRects.clear();
         m_pactDelRects.clear();
+        m_mateAddRects.clear();
+        m_matePlusRects.clear();
+        m_mateDelRects.clear();
         {
-            float cardH = 96.0f;
+            const float headH = 96.0f;          // 名称/规则/进度/状态
+            const float mateH = 46.0f;          // 成员区一行
             int n = (int)m_pacts.size();
-            D2D1_RECT_F listBlock = flow.block((float)n * (cardH + 14.0f) + 10.0f);
-            float listTop = listBlock.top;
+            float total = 0.0f;
+            for (int i = 0; i < n; ++i)
+                total += headH + (m_pacts[i].members.empty() ? 0.0f : mateH) + 14.0f;
+            D2D1_RECT_F listBlock = flow.block((std::max)(10.0f, total));
+            float y = listBlock.top;
             for (int i = 0; i < n; ++i) {
-                D2D1_RECT_F r = { x0, listTop + (float)i * (cardH + 14.0f),
-                                   x0 + contentW, listTop + (float)i * (cardH + 14.0f) + cardH };
+                const auto& p = m_pacts[i];
+                bool hasMates = !p.members.empty();
+                D2D1_RECT_F r = { x0, y, x0 + contentW, y + headH + (hasMates ? mateH : 0.0f) };
                 m_pactRects.push_back(r);
                 m_pactDelRects.push_back({ r.right - 34.0f, r.top + 12.0f, r.right - 12.0f, r.top + 34.0f });
+
+                std::vector<D2D1_RECT_F> plus, del;
+                if (hasMates) {
+                    float mx2 = r.left + 26.0f;
+                    float my2 = r.top + headH + 4.0f;
+                    for (size_t k = 0; k < p.members.size(); ++k) {
+                        // 每枚成员芯片宽 150，末尾放 +15 / 移除两个小按钮
+                        plus.push_back({ mx2 + 150.0f + 4.0f, my2 + 12.0f, mx2 + 150.0f + 52.0f, my2 + 34.0f });
+                        del.push_back({ mx2 + 150.0f + 58.0f, my2 + 12.0f, mx2 + 150.0f + 82.0f, my2 + 34.0f });
+                        mx2 += 150.0f + 96.0f;
+                    }
+                    m_mateAddRects.push_back({ mx2, my2 + 12.0f, mx2 + 84.0f, my2 + 34.0f });
+                } else {
+                    m_mateAddRects.push_back({ 0, 0, 0, 0 });
+                }
+                m_matePlusRects.push_back(plus);
+                m_mateDelRects.push_back(del);
+                y = r.bottom + 14.0f;
             }
+        }
+
+        // 队友名输入框（点「＋ 队友」后覆盖在该契约成员行上）
+        if (m_mateEditing && m_matePactIdx >= 0 && m_matePactIdx < (int)m_mateAddRects.size()) {
+            const auto& ar = m_mateAddRects[m_matePactIdx];
+            m_mateInputRect = { ar.left, ar.top, ar.left + 190.0f, ar.bottom };
+        } else {
+            m_mateInputRect = { 0, 0, 0, 0 };
         }
 
         {
@@ -348,11 +456,46 @@ void AchieveView::Update(float dt, const Input& in)
         if (!inside && in.clicked) CommitEdit();
     }
 
+    // 队友名输入：鼠标先交给输入框，点框外提交（回车/失焦由回调处理）
+    if (m_mateEditing && m_cvCached) {
+        TextStyle ms; ms.role = FontRole::Sans; ms.size = 13.0f; ms.vAlign = VAlign::Middle;
+        bool inside = m_mateEdit.HandleMouse(in, *m_cvCached, m_mateInputRect, ms, ScrollY(), 8.0f);
+        if (!inside && in.clicked) CommitMateEdit();
+    }
+
     UpdateWidgets(m_widgets, dt, in);
 
     if (m_tab == 1 && m_editingPact) {
         if (in.clicked && InRect(m_pactNameRect, mx, my)) BeginEdit(1);
         if (in.clicked && InRect(m_pactRuleRect, mx, my)) BeginEdit(2);
+    }
+
+    // 组队：邀请队友 / 队友加时 / 移除队友
+    if (m_tab == 1 && in.clicked && !m_mateEditing) {
+        for (int i = 0; i < (int)m_mateAddRects.size() && i < (int)m_pacts.size(); ++i) {
+            if (m_mateAddRects[i].right > m_mateAddRects[i].left &&
+                InRect(m_mateAddRects[i], mx, my)) { BeginMateEdit(i); return; }
+        }
+        for (int i = 0; i < (int)m_matePlusRects.size() && i < (int)m_pacts.size(); ++i) {
+            for (size_t k = 0; k < m_matePlusRects[i].size() && k < m_pacts[i].members.size(); ++k) {
+                if (InRect(m_matePlusRects[i][k], mx, my)) {
+                    m_pacts[i].members[k].progressMin += 15;   // 手动补记：本地模拟队友回传
+                    SavePacts();
+                    m_toast = true; m_toastT = 1.8f;
+                    m_toastMsg = m_pacts[i].members[k].name + L" +15 分";
+                    return;
+                }
+                if (InRect(m_mateDelRects[i][k], mx, my)) {
+                    if (!m_pacts[i].members[k].isSelf) {       // 自己不可移除
+                        std::wstring nm = m_pacts[i].members[k].name;
+                        m_pacts[i].members.erase(m_pacts[i].members.begin() + (long)k);
+                        SavePacts();
+                        m_toast = true; m_toastT = 2.0f; m_toastMsg = L"已移除「" + nm + L"」";
+                    }
+                    return;
+                }
+            }
+        }
     }
 
     // 契约列表：删除点击
@@ -430,6 +573,12 @@ void AchieveView::PaintDocxButton(Canvas& cv, const D2D1_RECT_F& r,
 // ---------------- 绘制 ----------------
 void AchieveView::Paint(Canvas& cv)
 {
+    // 内容随滚动平移并裁到可视区（此前漏了这一步：SetContentHeight 虽已设置，
+    // 但没有 -ScrollY 位移与裁剪，页面表现为「滚不动 / 滚了内容不动」）。
+    float s = ScrollY();
+    cv.PushClip(m_area);
+    cv.PushTransform(D2D1::Matrix3x2F::Translation(0.0f, -s));
+
     if (m_tab == 0) PaintF3(cv);
     else PaintF4(cv);
 
@@ -441,6 +590,9 @@ void AchieveView::Paint(Canvas& cv)
         m_edit.Paint(cv, { r.left + 8.0f, r.top, r.right - 6.0f, r.bottom },
                      es, pal.ink900, L"", pal.ink300, 0.0f, ScrollY());
     }
+
+    cv.PopTransform();
+    cv.PopClip();
 
     if (m_toast) {
         const auto& pal = cv.Pal();
@@ -503,6 +655,43 @@ void AchieveView::PaintF3(Canvas& cv)
         TextStyle ps; ps.role = FontRole::Mono; ps.size = 11.0f; ps.vAlign = VAlign::Middle;
         std::wstring prog = (b.goal > 0 ? std::to_wstring(b.cur) + L" / " + std::to_wstring(b.goal) : std::to_wstring(b.cur));
         cv.Text(prog, { r.left + 52.0f, r.top + 62.0f, r.right - 10.0f, r.top + 80.0f }, ps, accent);
+    }
+
+    // 连续里程碑卡
+    if (m_streakCard.bottom > m_streakCard.top) {
+        cv.FillRoundRect(m_streakCard, shape::kEdge, pal.paperHi);
+        cv.StrokeRoundRect(m_streakCard, shape::kEdge, pal.rule, shape::kHair);
+        float sx = m_streakCard.left + 26.0f, sr = m_streakCard.right - 26.0f;
+        TextStyle ss2; ss2.role = FontRole::Mono; ss2.size = 10.5f; ss2.letterSpacing = 2.0f; ss2.weight = DWRITE_FONT_WEIGHT_BOLD;
+        cv.Text(L"SECTION · 连续打卡里程碑", { sx, m_streakCard.top + 16.0f, sr, m_streakCard.top + 34.0f }, ss2, pal.ink300);
+
+        // 阶梯：3 / 7 / 21 / 50 / 100 天
+        const int steps[5] = { 3, 7, 21, 50, 100 };
+        float y = m_streakCard.top + 46.0f;
+        float w = (sr - sx) / 5.0f;
+        for (int k = 0; k < 5; ++k) {
+            float x = sx + (float)k * w;
+            bool got = m_streak >= steps[k];
+            float cy = y + 16.0f;
+            cv.FillCircle(x + 26.0f, cy, 12.0f, got ? pal.seal : WithAlpha(pal.ink300, 0.25f));
+            TextStyle ds3; ds3.role = FontRole::Mono; ds3.size = 10.0f; ds3.weight = DWRITE_FONT_WEIGHT_BOLD;
+            ds3.hAlign = HAlign::Center; ds3.vAlign = VAlign::Middle;
+            cv.Text(got ? L"✓" : L"·", { x + 14.0f, cy - 12.0f, x + 38.0f, cy + 12.0f }, ds3, pal.paperHi);
+            // 连接线（下一档之间）
+            if (k < 4) {
+                bool nxt = m_streak >= steps[k + 1];
+                cv.Line(x + 38.0f, cy, x + w + 14.0f, cy,
+                        nxt ? pal.seal : WithAlpha(pal.ink300, 0.35f), 2.0f);
+            }
+            TextStyle ls; ls.role = FontRole::Mono; ls.size = 10.5f; ls.hAlign = HAlign::Center; ls.vAlign = VAlign::Top;
+            cv.Text(std::to_wstring(steps[k]) + L" 天", { x, cy + 16.0f, x + w, cy + 32.0f }, ls, got ? pal.seal : pal.ink500);
+        }
+        TextStyle hs2; hs2.role = FontRole::Sans; hs2.size = 11.5f;
+        int nextGoal = 0;
+        for (int k = 0; k < 5; ++k) if (m_streak < steps[k]) { nextGoal = steps[k]; break; }
+        std::wstring tip = nextGoal ? (L"当前连续 " + std::to_wstring(m_streak) + L" 天，距「" + std::to_wstring(nextGoal) + L" 天」还差 " + std::to_wstring(nextGoal - m_streak) + L" 天。")
+                                    : (L"当前连续 " + std::to_wstring(m_streak) + L" 天，已达成全部里程碑。");
+        cv.Text(tip, { sx, m_streakCard.top + 96.0f, sr, m_streakCard.top + 114.0f }, hs2, pal.ink500);
     }
 
     // 年度回顾卡
@@ -701,12 +890,83 @@ void AchieveView::PaintF4(Canvas& cv)
         TextStyle xs; xs.role = FontRole::Sans; xs.size = 14.0f; xs.weight = DWRITE_FONT_WEIGHT_BOLD;
         xs.hAlign = HAlign::Center; xs.vAlign = VAlign::Middle;
         cv.Text(L"×", dr, xs, pal.ink500);
+
+        // ---- 成员区（组队）----
+        if (!p.members.empty() && i < (int)m_matePlusRects.size()) {
+            float my2 = r.top + 96.0f + 4.0f;
+            cv.Line(ix, my2 - 2.0f, right, my2 - 2.0f, WithAlpha(pal.rule, 0.5f), shape::kHair);
+            float mx2 = ix;
+            for (size_t k = 0; k < p.members.size(); ++k) {
+                const auto& m = p.members[k];
+                int done = m.isSelf ? m_todayFocus : m.progressMin;   // 自己取真实专注，队友取本地记录
+                bool ok = done >= p.targetMinPerDay;
+                float chipW = 150.0f;
+
+                // 圆章 + 名字
+                cv.FillCircle(mx2 + 14.0f, my2 + 23.0f, 12.0f,
+                              m.isSelf ? pal.seal : WithAlpha(pal.jade, 0.85f));
+                TextStyle is; is.role = FontRole::Serif; is.size = 11.0f;
+                is.weight = DWRITE_FONT_WEIGHT_BOLD; is.hAlign = HAlign::Center; is.vAlign = VAlign::Middle;
+                cv.Text(m.name.empty() ? L"?" : m.name.substr(0, 1),
+                        { mx2 + 2.0f, my2 + 11.0f, mx2 + 26.0f, my2 + 35.0f }, is, pal.paperHi);
+
+                TextStyle ns2; ns2.role = FontRole::Sans; ns2.size = 11.5f;
+                ns2.weight = DWRITE_FONT_WEIGHT_SEMI_BOLD; ns2.vAlign = VAlign::Top;
+                cv.Text(m.name + (m.isSelf ? L"（我）" : L""),
+                        { mx2 + 32.0f, my2 + 8.0f, mx2 + chipW, my2 + 24.0f }, ns2,
+                        m.isSelf ? pal.ink900 : pal.ink700);
+
+                // 迷你进度条
+                float bx2 = mx2 + 32.0f, bw2 = chipW - 40.0f, by2 = my2 + 27.0f;
+                cv.FillRoundRect({ bx2, by2, bx2 + bw2, by2 + 6.0f }, 3.0f, pal.paperLo);
+                float r2 = p.targetMinPerDay > 0 ? (float)done / (float)p.targetMinPerDay : 0.0f;
+                r2 = (std::max)(0.0f, (std::min)(1.0f, r2));
+                if (r2 > 0.0f)
+                    cv.FillRoundRect({ bx2, by2, bx2 + bw2 * r2, by2 + 6.0f }, 3.0f, ok ? pal.jade : pal.brass);
+
+                // +15 / 移除
+                if (k < m_matePlusRects[i].size()) {
+                    const auto& pr2 = m_matePlusRects[i][k];
+                    cv.FillRoundRect(pr2, 4.0f, WithAlpha(pal.ink300, 0.10f));
+                    TextStyle bs2; bs2.role = FontRole::Mono; bs2.size = 10.0f;
+                    bs2.hAlign = HAlign::Center; bs2.vAlign = VAlign::Middle;
+                    cv.Text(L"+15", pr2, bs2, pal.ink700);
+                }
+                if (k < m_mateDelRects[i].size() && !m.isSelf) {
+                    const auto& dr2 = m_mateDelRects[i][k];
+                    cv.FillRoundRect(dr2, 4.0f, WithAlpha(pal.brass, 0.12f));
+                    TextStyle ds3; ds3.role = FontRole::Sans; ds3.size = 12.0f;
+                    ds3.hAlign = HAlign::Center; ds3.vAlign = VAlign::Middle;
+                    cv.Text(L"×", dr2, ds3, pal.brass);
+                }
+                mx2 += chipW + 96.0f;
+            }
+
+            // 邀请队友按钮 / 输入态
+            if (m_mateEditing && m_matePactIdx == i) {
+                cv.FillRoundRect(m_mateInputRect, shape::kEdgeSoft, pal.paperHi);
+                cv.StrokeRoundRect(m_mateInputRect, shape::kEdgeSoft, pal.seal, shape::kStroke);
+                TextStyle ms2; ms2.role = FontRole::Sans; ms2.size = 13.0f; ms2.vAlign = VAlign::Middle;
+                m_mateEdit.Paint(cv, { m_mateInputRect.left + 8.0f, m_mateInputRect.top,
+                                       m_mateInputRect.right - 6.0f, m_mateInputRect.bottom },
+                                 ms2, pal.ink900, L"队友名字 ↵", pal.ink300, 0.0f, ScrollY());
+            } else if (m_mateAddRects[i].right > m_mateAddRects[i].left) {
+                const auto& ar = m_mateAddRects[i];
+                cv.FillRoundRect(ar, 4.0f, WithAlpha(pal.jade, 0.14f));
+                cv.StrokeRoundRect(ar, 4.0f, WithAlpha(pal.jade, 0.6f), shape::kHair);
+                TextStyle as2; as2.role = FontRole::Sans; as2.size = 11.0f;
+                as2.weight = DWRITE_FONT_WEIGHT_SEMI_BOLD;
+                as2.hAlign = HAlign::Center; as2.vAlign = VAlign::Middle;
+                cv.Text(L"＋ 邀请队友", ar, as2, pal.jade);
+            }
+        }
     }
 
     if (m_pactRects.empty()) {
-        TextStyle es; es.role = FontRole::Sans; es.size = 13.0f;
-        cv.Text(L"还没有契约。点「＋ 新建契约」，为自己定一个期限 + 规则的自律约定。",
-                { m_tabF3.bounds.left + 26.0f, m_newPactBtn.bounds.bottom + 30.0f, m_tabF3.bounds.right - 26.0f, m_newPactBtn.bounds.bottom + 54.0f }, es, pal.ink500);
+        TextStyle es2; es2.role = FontRole::Sans; es2.size = 13.0f;
+        cv.Text(L"还没有契约。点「＋ 新建契约」定一个期限 + 规则的自律约定，"
+                L"再用「＋ 邀请队友」拉上同伴一起打卡（队友进度本地记录）。",
+                { m_tabF3.bounds.left + 26.0f, m_newPactBtn.bounds.bottom + 30.0f, m_tabF3.bounds.right - 26.0f, m_newPactBtn.bounds.bottom + 54.0f }, es2, pal.ink500);
     }
 
     m_backBtn.Paint(cv);
@@ -864,6 +1124,7 @@ void AchieveView::LoadPacts()
                     };
                     if (auto* a = gm("name")) pm.name = U2W(a->str);
                     if (auto* a = gm("self")) pm.isSelf = (a->type == JVal::Bool) ? a->bval : (a->num != 0.0);
+                    if (auto* a = gm("min"))  pm.progressMin = (int)a->num;    // 队友进度（本地记录）
                     p.members.push_back(pm);
                 }
             }
@@ -890,7 +1151,9 @@ void AchieveView::SavePacts()
         out += "    \"members\": [\n";
         for (size_t j = 0; j < p.members.size(); ++j) {
             const auto& m = p.members[j];
-            out += "      { \"name\": " + JQuote(W2U(m.name)) + ", \"self\": " + std::string(m.isSelf ? "true" : "false") + " }";
+            out += "      { \"name\": " + JQuote(W2U(m.name)) +
+                   ", \"self\": " + std::string(m.isSelf ? "true" : "false") +
+                   ", \"min\": " + std::to_string(m.progressMin) + " }";
             out += (j + 1 < p.members.size()) ? ",\n" : "\n";
         }
         out += "    ]\n";

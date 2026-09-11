@@ -47,6 +47,7 @@ public:
     void Layout(const D2D1_RECT_F& area, Canvas& cv) override;
     void Update(float dt, const Input& in) override;
     void Paint(Canvas& cv) override;
+    void DebugForcePreview() override;   // 截图自检：切到「契约·组队」页
 
 private:
     // ---- F3 数据 ----
@@ -77,6 +78,17 @@ private:
     std::vector<D2D1_RECT_F> m_pactDelRects;
     int m_todayFocus = 0;    // 今日专注分钟（F4 自评进度）
 
+    // ---- F4 组队（本地优先；多人实时同步为服务端后续项）----
+    FieldEdit m_mateEdit;                                  // 队友名输入（统一输入框）
+    bool   m_mateEditing = false;
+    int    m_matePactIdx = -1;                             // 正在为哪个契约添加队友
+    std::wstring m_mateName;
+    D2D1_RECT_F m_mateInputRect{};
+    std::vector<D2D1_RECT_F> m_mateAddRects;               // 每契约「＋ 队友」按钮
+    std::vector<std::vector<D2D1_RECT_F>> m_matePlusRects; // 每契约 · 每队友「+15 分」
+    std::vector<std::vector<D2D1_RECT_F>> m_mateDelRects;  // 每契约 · 每队友「移除」
+    void BeginMateEdit(int pactIdx); void CommitMateEdit(); void CancelMateEdit();
+
     // ---- 编辑（v2 统一输入框：契约名称 / 规则）----
     bool m_editing = false; int m_editField = 0;   // 1 名称 / 2 规则
     FieldEdit m_edit;
@@ -92,6 +104,7 @@ private:
     int m_tab = 0;                    // 0 成就 · 1 契约
     std::vector<D2D1_RECT_F> m_badgeRects;
     D2D1_RECT_F m_yearCard{};
+    D2D1_RECT_F m_streakCard{};        // 连续里程碑卡（3/7/21/50/100 天阶梯）
     std::vector<Widget*> m_widgets;
     float m_t = 0.0f;
     D2D1_RECT_F m_area{};
