@@ -31,7 +31,7 @@ public:
     void Show();
     void Hide();
     void Toggle();
-    // 浮现/淡出（ANIMATE_WINDOW AW_BLEND 真·alpha 渐变）：光标悬停看板娘时调用。
+    // 浮现/淡出（ANIMATE_WINDOW AW_BLEND 真·alpha 渐变）：由浮层显隐逻辑调用。
     void ShowWithFade();
     void HideWithFade();
     bool Visible() const { return m_visible; }

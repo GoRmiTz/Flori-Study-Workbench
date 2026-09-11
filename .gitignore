@@ -65,7 +65,11 @@ releases/
 *.suo
 *.swp
 .DS_Store
-# 暂停开发产物的归档目录（不参与构建、不入库；如看板娘运行时 _attic/kanban_runtime）
+# 归档目录（暂停模块的运行时产物，不入库）
 _attic/
 # 旧参考资料（PM 文档/封存 WebApp/设计提案，仅本机参考，不入库）
 reference/
+# 开发过程文档（内部交接 / 日志 / 评审记录，仅本机保留，不入库）
+docs/
+# AI 出题凭据（用户本地密钥，绝不入库）
+ai.json

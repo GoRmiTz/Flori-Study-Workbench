@@ -109,6 +109,7 @@ bool RoadmapView::IsColFav(const std::wstring& id) const
 void RoadmapView::Layout(const D2D1_RECT_F& area, Canvas& cv)
 {
     View::Layout(area, cv);
+    m_cvCached = &cv;
     LoadColumns();
     float availW = area.right - area.left;
     m_contentW = (std::min)(shape::kMaxWidth, availW - 72.0f);
@@ -216,16 +217,24 @@ void RoadmapView::Update(float dt, const Input& in)
     if (!m_previewing && m_previewAnim < 0.004f) m_previewAnim = 0.0f;
 
     if (m_editing) {
+        // 标题编辑中：鼠标先交给标题框（点击定位光标 / 拖拽框选），点外部由失焦回调提交
+        if (m_titleActive && m_cvCached) {
+            TextStyle ts; ts.role = FontRole::Serif; ts.size = 17.0f;
+            ts.weight = DWRITE_FONT_WEIGHT_BOLD; ts.vAlign = VAlign::Middle;
+            m_edTitle.HandleMouse(in, *m_cvCached, m_edTitleBox, ts, 0.0f, 4.0f);
+        }
         if (in.keyDown[VK_ESCAPE]) { m_edColorMode = 0; m_fmtBrush = false; CloseEditor(false); return; }
         if (in.clicked) {
             float mx = in.mouseX, my = in.mouseY;
 
-            // 点标题框 → 聚焦隐藏的标题输入框（可见文字由 D3D 用软件字体绘制，不覆盖边框）
+            // 点标题框 → 进入标题编辑（1×1 透明代理 + D3D 自绘，不覆盖边框）
             if (Hit(m_edTitleBox, mx, my)) {
-                if (m_edTitle) {
-                    SetFocus(m_edTitle);
-                    int len = GetWindowTextLengthW(m_edTitle);
-                    SendMessageW(m_edTitle, EM_SETSEL, (WPARAM)len, (LPARAM)len); // 光标置于文末
+                if (!m_titleActive) {
+                    m_edTitle.onEnter     = [this] { CommitTitleEdit(); if (m_edBody) SetFocus(m_edBody); };
+                    m_edTitle.onEsc       = [this] { m_edColorMode = 0; m_fmtBrush = false; CloseEditor(false); };
+                    m_edTitle.onKillFocus = [this] { CommitTitleEdit(); };
+                    m_edTitle.Begin(m_edTitleBuf, false, 17.0f);
+                    m_titleActive = true;
                 }
                 return;
             }
@@ -309,8 +318,14 @@ void RoadmapView::Update(float dt, const Input& in)
                 float wh = m_pubPvBody.bottom - m_pubPvBody.top;
                 float maxS = (std::max)(0.0f, m_pubPvContentH - wh);
                 m_pubPreviewScroll = (std::max)(0.0f, (std::min)(maxS, m_pubPreviewScroll + in.wheel * 48.0f));
-                // 滚动时同步评论输入框位置（它在 body 底部）
-                if (m_pubCommentEdit) BeginPubCommentEdit();
+                // 评论输入框随内容滚动（位置由 Layout/ComputePubPreviewRects 重算，代理在 Paint 自动跟随）
+            }
+            // 评论编辑中：鼠标先交给输入框（点击定位光标 / 拖拽框选）
+            if (m_pubCommentEdit && m_cvCached) {
+                TextStyle pt; pt.role = FontRole::Sans; pt.size = 12.5f; pt.vAlign = VAlign::Middle;
+                D2D1_RECT_F tbox{ m_pubPvInput.left + 12.0f, m_pubPvInput.top,
+                                  m_pubPvInput.right - 12.0f, m_pubPvInput.bottom };
+                m_pubComment.HandleMouse(in, *m_cvCached, tbox, pt, 0.0f, 0.0f);
             }
             if (in.clicked) {
                 float mx = in.mouseX, my = in.mouseY;
@@ -632,15 +647,17 @@ void RoadmapView::PaintEditorOverlay(Canvas& cv)
     hs.weight = DWRITE_FONT_WEIGHT_BOLD;
     cv.Text(L"标题", { m_edTitleBox.left, m_edTitleBox.top - 20.0f,
                        m_edTitleBox.right, m_edTitleBox.top - 4.0f }, hs, pal.seal);
-    // 标题：用 D3D 软件字体绘制（隐藏 EDIT 仅作输入代理），保留编辑器卡边框
+    // 标题：v2 统一输入框（编辑中文字/光标/选区/IME 由 D3D 绘制），保留编辑器卡边框
     {
         TextStyle ts; ts.role = FontRole::Serif; ts.size = 17.0f;
         ts.weight = DWRITE_FONT_WEIGHT_BOLD; ts.vAlign = VAlign::Middle;
-        int caret = (::GetFocus() == m_edTitle) ? lj::EditCaretPos(m_edTitle) : -1;
-        int sa = -1, sb = -1;
-        if (caret >= 0) lj::EditSelRange(m_edTitle, sa, sb);
-        lj::PaintFieldEdit(cv, m_edTitleBox, ts, lj::ReadEditBuffer(m_edTitle),
-                          pal.ink900, caret, 4.0f, sa, sb);
+        if (m_titleActive) {
+            m_edTitle.Paint(cv, m_edTitleBox, ts, pal.ink900, L"未命名专栏", pal.ink300, 4.0f, 0.0f);
+        } else {
+            lj::PaintFieldEdit(cv, m_edTitleBox, ts,
+                              m_edTitleBuf.empty() ? std::wstring(L"未命名专栏") : m_edTitleBuf,
+                              m_edTitleBuf.empty() ? pal.ink300 : pal.ink900, -1, 4.0f);
+        }
     }
     cv.Text(L"正文", { m_edBodyBox.left, m_edBodyBox.top - 20.0f,
                        m_edBodyBox.right, m_edBodyBox.top - 4.0f }, hs, pal.seal);
@@ -818,23 +835,17 @@ void RoadmapView::EnsureEditors()
     static HMODULE sRich = LoadLibraryW(L"Msftedit.dll");
     (void)sRich;
 
-    auto mk = [&](HWND& h, bool multiline) {
-        if (h) return;
-        DWORD style = WS_CHILD | WS_TABSTOP | ES_LEFT;
-        if (multiline) style |= WS_VSCROLL | ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN;
-        else           style |= ES_AUTOHSCROLL;   // 单行标题：允许横向滚动（1x1 代理缓冲仍完整）
-        // 注意：不加 ES_AUTOHSCROLL → RichEdit 按控件宽度自动换行（满足「自动换行」需求）
+    // 标题已改用 v2 统一输入框（1×1 透明代理 + D3D 自绘，无白块），无需创建 EDIT。
+    // 正文 RichEdit 保留原生交互（可见框内点击定位/框选本来就正常）。
+    if (!m_edBody) {
+        DWORD style = WS_CHILD | WS_TABSTOP | WS_VSCROLL | ES_MULTILINE
+                    | ES_AUTOVSCROLL | ES_LEFT | ES_WANTRETURN;
         // 使用 RichEdit 4.1+ 类名（RICHEDIT50W 宏在本 SDK 未声明，直接用字面量）
-        const wchar_t* cls = multiline ? L"RICHEDIT50W" : L"EDIT";
-        // 标题单行框：不加 WS_EX_TRANSPARENT——编辑态铺成标题框全尺寸收鼠标
-        // （点击定位/拖拽框选），配合 WM_SETREDRAW(FALSE) 不自绘，文字/光标/选区全由 D3D 绘制。
-        // 正文 RichEdit 保留原生交互（可见框内点击定位/框选本来就正常），不加。
-        DWORD ex = 0;
-        h = CreateWindowExW(ex, cls, L"",
+        m_edBody = CreateWindowExW(0, L"RICHEDIT50W", L"",
                             style, 0, 0, 10, 10, parent, nullptr,
                             (HINSTANCE)GetWindowLongPtrW(parent, GWLP_HINSTANCE), nullptr);
-        if (h && m_edFont) SendMessageW(h, WM_SETFONT, (WPARAM)m_edFont, TRUE);
-        if (h && multiline) {
+        if (m_edBody && m_edFont) SendMessageW(m_edBody, WM_SETFONT, (WPARAM)m_edFont, TRUE);
+        if (m_edBody) {
             // 默认字符格式：微软雅黑 12pt（240 twips），让新建正文有合适字号
             CHARFORMAT2W cf{};
             cf.cbSize = sizeof(cf);
@@ -843,51 +854,32 @@ void RoadmapView::EnsureEditors()
             cf.bCharSet = DEFAULT_CHARSET;
             cf.crTextColor = RgbOf(lj::AppPalette().ink900); // 深色主题下正文也要可读
             wcscpy_s(cf.szFaceName, L"Microsoft YaHei UI");
-            SendMessageW(h, EM_SETCHARFORMAT, SCF_ALL, (LPARAM)&cf);
+            SendMessageW(m_edBody, EM_SETCHARFORMAT, SCF_ALL, (LPARAM)&cf);
             // 背景：与编辑器卡面色一致（lift=0.4），输入框不再是一块白/暗矩形
-            SendMessageW(h, EM_SETBKGNDCOLOR, 0, (LPARAM)RgbOf(lj::CardFace(0.4f)));
+            SendMessageW(m_edBody, EM_SETBKGNDCOLOR, 0, (LPARAM)RgbOf(lj::CardFace(0.4f)));
             // 自动识别 URL 为链接（插入「链接」时键入网址即转为可点链接）
-            SendMessageW(h, EM_AUTOURLDETECT, 1, 0);
-        }
-        // 标题代理子类化：Enter 跳正文（避免单行 EDIT 蜂鸣）、Esc 关编辑器、隐藏原生光标。
-        // 正文 RichEdit 保留原生光标（可见框内需要 I-beam 定位），不子类化。
-        if (h && !multiline) {
-            m_edTitleOld = (WNDPROC)SetWindowLongPtrW(h, GWLP_WNDPROC, (LONG_PTR)TitleEditProc);
-            SetWindowLongPtrW(h, GWLP_USERDATA, (LONG_PTR)this);
-        }
-        if (h) ShowWindow(h, SW_HIDE);
-    };
-    mk(m_edTitle, false);
-    mk(m_edBody, true);
-}
-
-LRESULT CALLBACK RoadmapView::TitleEditProc(HWND w, UINT msg, WPARAM wp, LPARAM lp)
-{
-    RoadmapView* self = (RoadmapView*)GetWindowLongPtrW(w, GWLP_USERDATA);
-    if (self) {
-        if (msg == WM_KEYDOWN) {
-            if (wp == VK_RETURN) { if (self->m_edBody) SetFocus(self->m_edBody); return 0; }  // Enter → 跳正文
-            if (wp == VK_ESCAPE) { self->CloseEditor(false); return 0; }                       // Esc → 取消编辑
-        } else if (msg == WM_SETFOCUS) {
-            int len = GetWindowTextLengthW(w);
-            SendMessageW(w, EM_SETSEL, (WPARAM)len, (LPARAM)len);   // 焦点时光标置于文末
+            SendMessageW(m_edBody, EM_AUTOURLDETECT, 1, 0);
+            ShowWindow(m_edBody, SW_HIDE);
         }
     }
-    WNDPROC old = self ? self->m_edTitleOld : nullptr;
-    LRESULT r = old ? CallWindowProcW(old, w, msg, wp, lp) : DefWindowProcW(w, msg, wp, lp);
-    // 隐藏代理的原生系统光标：我们用 D3D 自绘光标，否则原生光标会在输入框处闪一下
-    if (msg == WM_SETFOCUS || msg == WM_KEYDOWN || msg == WM_CHAR ||
-        msg == WM_IME_STARTCOMPOSITION || msg == WM_IME_COMPOSITION || msg == WM_IME_CHAR)
-        HideCaret(w);
-    return r;
+}
+
+// 标题编辑（v2 统一输入框）：失焦/回车时把缓冲落回 m_edTitleBuf
+void RoadmapView::CommitTitleEdit()
+{
+    if (!m_titleActive) return;
+    std::wstring t;
+    m_edTitle.End(true, t);
+    m_edTitleBuf = t;
+    m_titleActive = false;
 }
 
 void RoadmapView::DestroyEditors()
 {
-    if (m_edTitle) { DestroyWindow(m_edTitle); m_edTitle = nullptr; }
+    m_edTitle.Cancel();
+    m_titleActive = false;
     if (m_edBody)  { DestroyWindow(m_edBody);  m_edBody  = nullptr; }
     if (m_edFont)  { DeleteObject(m_edFont);   m_edFont  = nullptr; }
-    m_edTitleOld = nullptr;
 }
 
 // 当前选区 / 插入点是否含某字符效果（如 CFE_BOLD / CFE_ITALIC）
@@ -1090,26 +1082,19 @@ void RoadmapView::OpenEditor(const std::wstring& id)
     m_editId = id;
     m_editing = true;
     m_editAnim = 0.0f;
-    // 标题框是纯 EDIT，背景与编辑器卡面色（lift=0.4）一致 → 无缝
-    lj::SetEditBackdrop(lj::CardFace(0.4f));
     ComputeEditorRects();
     EnsureEditors();
     // 每次打开都按当前主题设 RichEdit 背景，确保与编辑器卡面色一致（深色下不再白块）
     if (m_edBody) SendMessageW(m_edBody, EM_SETBKGNDCOLOR, 0, (LPARAM)RgbOf(lj::CardFace(0.4f)));
-    const float s = (float)AppDpi() / 96.0f;
     std::wstring t, b; std::string rtf;
     if (!id.empty()) {
         for (auto& c : m_cols)
             if (c.id == id) { t = c.title; b = c.body; rtf = c.bodyRtf; break; }
     }
-    auto place = [&](HWND h, const D2D1_RECT_F& r) {
-        if (!h) return;
-        SetWindowPos(h, nullptr, (int)(r.left * s), (int)(r.top * s),
-                     (int)((r.right - r.left) * s), (int)((r.bottom - r.top) * s), SWP_NOZORDER);
-        ShowWindow(h, SW_SHOW);
-    };
-    // 标题：纯文本
-    if (m_edTitle) SetWindowTextW(m_edTitle, t.c_str());
+    // 标题：v2 统一输入框持有缓冲，失焦/回车时落回 m_edTitleBuf；
+    // 不在此处 Begin（焦点先给正文），点击标题框时再进入编辑。
+    m_edTitleBuf = t;
+    m_titleActive = false;
     // 正文：有 RTF 则流式载入富文本，否则按纯文本设置
     if (m_edBody) {
         if (!rtf.empty()) {
@@ -1119,24 +1104,20 @@ void RoadmapView::OpenEditor(const std::wstring& id)
             SetWindowTextW(m_edBody, b.c_str());
         }
     }
-    // 标题框：铺成标题框全尺寸（内部处理鼠标点击定位/拖拽框选），
-    // WM_SETREDRAW(FALSE) 禁止自绘——可见文字/光标/选区全由 D3D 绘制，不覆盖设计边框。
-    // 正文 RichEdit 保留（富文本无法在 D3D 重绘）。
-    if (m_edTitle) {
-        int tw = (int)((m_edTitleBox.right - m_edTitleBox.left) * s);
-        int th = (int)((m_edTitleBox.bottom - m_edTitleBox.top) * s);
-        SetWindowPos(m_edTitle, nullptr, (int)(m_edTitleBox.left * s), (int)(m_edTitleBox.top * s),
-                     tw > 1 ? tw : 1, th > 1 ? th : 1, SWP_NOZORDER);
-        SendMessageW(m_edTitle, WM_SETREDRAW, FALSE, 0);
-        ShowWindow(m_edTitle, SW_SHOW);
+    const float s = (float)AppDpi() / 96.0f;
+    if (m_edBody) {
+        SetWindowPos(m_edBody, nullptr, (int)(m_edBodyBox.left * s), (int)(m_edBodyBox.top * s),
+                     (int)((m_edBodyBox.right - m_edBodyBox.left) * s),
+                     (int)((m_edBodyBox.bottom - m_edBodyBox.top) * s), SWP_NOZORDER);
+        ShowWindow(m_edBody, SW_SHOW);
+        SetFocus(m_edBody);
     }
-    place(m_edBody,  m_edBodyBox);
-    if (m_edBody) SetFocus(m_edBody);
 }
 
 void RoadmapView::CloseEditor(bool save)
 {
     if (save) {
+        CommitTitleEdit();                        // 标题缓冲落盘
         auto grab = [](HWND h) -> std::wstring {
             if (!h) return L"";
             int n = GetWindowTextLengthW(h);
@@ -1145,7 +1126,7 @@ void RoadmapView::CloseEditor(bool save)
             t.resize((size_t)n);
             return t;
         };
-        std::wstring title = grab(m_edTitle);
+        std::wstring title = m_edTitleBuf;
         std::wstring body  = grab(m_edBody);
         std::string  rtf   = EdGetRtf(m_edBody);   // 富文本（加粗/字号等格式）
         if (title.empty()) title = L"未命名专栏";
@@ -1169,10 +1150,9 @@ void RoadmapView::CloseEditor(bool save)
         }
         store.SaveColumns(cols);
     }
-    if (m_edTitle) {
-        SendMessageW(m_edTitle, WM_SETREDRAW, TRUE, 0);   // 恢复自绘能力（隐藏后不再画）
-        ShowWindow(m_edTitle, SW_HIDE);
-    }
+    // 标题编辑会话收尾（若还在编辑中）
+    CommitTitleEdit();
+    m_edTitleBuf.clear();
     if (m_edBody)  ShowWindow(m_edBody,  SW_HIDE);
     if (AppHwnd()) SetFocus(AppHwnd());
     m_editing = false;
@@ -1194,7 +1174,8 @@ void RoadmapView::DoPublish()
         t.resize((size_t)n);
         return t;
     };
-    std::wstring title = grab(m_edTitle);
+    CommitTitleEdit();
+    std::wstring title = m_edTitleBuf;
     std::wstring body  = grab(m_edBody);
     // 去首尾空白后再判空
     size_t a = title.find_first_not_of(L" \t");
@@ -1475,81 +1456,34 @@ void RoadmapView::OnPubDetail(const net::Response& r)
     }
 }
 
-LRESULT CALLBACK RoadmapView::PubCommentEditProc(HWND w, UINT msg, WPARAM wp, LPARAM lp)
-{
-    RoadmapView* self = (RoadmapView*)GetWindowLongPtrW(w, GWLP_USERDATA);
-    if (self) {
-        if (msg == WM_KEYDOWN) {
-            if (wp == VK_RETURN) { self->EndPubCommentEdit(true); return 0; }
-            if (wp == VK_ESCAPE) { self->EndPubCommentEdit(false); return 0; }
-        } else if (msg == WM_KILLFOCUS) {
-            self->EndPubCommentEdit(false);
-        }
-    }
-    WNDPROC old = self ? self->m_pubCommentOld : nullptr;
-    LRESULT r = old ? CallWindowProcW(old, w, msg, wp, lp) : DefWindowProcW(w, msg, wp, lp);
-    if (msg == WM_SETFOCUS || msg == WM_KEYDOWN || msg == WM_CHAR ||
-        msg == WM_IME_STARTCOMPOSITION || msg == WM_IME_COMPOSITION || msg == WM_IME_CHAR)
-        HideCaret(w);
-    return r;
-}
-
-void RoadmapView::EnsurePubCommentEdit()
-{
-    if (m_pubCommentEdit) return;
-    HWND parent = AppHwnd();
-    if (!parent) return;
-    m_pubCommentEdit = CreateWindowExW(0, L"EDIT", L"",
-                                       WS_CHILD | ES_AUTOHSCROLL | ES_LEFT,
-                                       0, 0, 10, 10, parent, nullptr,
-                                       (HINSTANCE)GetWindowLongPtrW(parent, GWLP_HINSTANCE), nullptr);
-    if (!m_pubCommentEdit) return;
-    m_pubCommentOld = (WNDPROC)SetWindowLongPtrW(m_pubCommentEdit, GWLP_WNDPROC, (LONG_PTR)PubCommentEditProc);
-    SetWindowLongPtrW(m_pubCommentEdit, GWLP_USERDATA, (LONG_PTR)this);
-    HFONT fnt = CreateFontW(-14, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-                            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                            DEFAULT_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Microsoft YaHei UI");
-    if (fnt) { SendMessageW(m_pubCommentEdit, WM_SETFONT, (WPARAM)fnt, TRUE); }
-    ShowWindow(m_pubCommentEdit, SW_HIDE);
-}
-
+// ---- 评论输入（v2 统一输入框）----
 void RoadmapView::BeginPubCommentEdit()
 {
-    EnsurePubCommentEdit();
-    if (!m_pubCommentEdit) return;
-    lj::SetEditBackdrop(lj::CardFace(0.4f));
-    SetWindowTextW(m_pubCommentEdit, m_pubCommentDraft.c_str());
-    float s = (float)AppDpi() / 96.0f;
-    SetWindowPos(m_pubCommentEdit, nullptr,
-                 (int)(m_pubPvInput.left * s), (int)(m_pubPvInput.top * s),
-                 (int)((m_pubPvInput.right - m_pubPvInput.left) * s),
-                 (int)((m_pubPvInput.bottom - m_pubPvInput.top) * s), SWP_NOZORDER);
-    SendMessageW(m_pubCommentEdit, WM_SETREDRAW, FALSE, 0);
-    ShowWindow(m_pubCommentEdit, SW_SHOW);
-    SetFocus(m_pubCommentEdit);
-    int len = GetWindowTextLengthW(m_pubCommentEdit);
-    SendMessageW(m_pubCommentEdit, EM_SETSEL, (WPARAM)len, (LPARAM)len);
+    if (m_pubCommentEdit) return;
+    m_pubCommentEdit = true;
+    m_pubComment.onEnter     = [this] { EndPubCommentEdit(true); };
+    m_pubComment.onEsc       = [this] { m_pubCommentDraft.clear(); EndPubCommentEdit(false); };
+    m_pubComment.onKillFocus = [this] { EndPubCommentEdit(false); };
+    m_pubComment.Begin(m_pubCommentDraft, false, 12.5f);
 }
 
 void RoadmapView::EndPubCommentEdit(bool submit)
 {
     if (!m_pubCommentEdit) return;
-    if (submit) {
-        std::wstring t = lj::ReadEditBuffer(m_pubCommentEdit);
-        if (!t.empty()) {
-            std::string pid = m_pubPreviewId;
-            Cloud::RunAsync([this, pid, t] {
-                Cloud::Instance().CommentColumn(pid, t);
-                FetchPublicColumns();
-                LoadPubDetail(pid);
-            });
-            m_pubCommentDraft.clear();
-        }
+    std::wstring t;
+    m_pubComment.End(true, t);
+    if (submit && !t.empty()) {
+        std::string pid = m_pubPreviewId;
+        Cloud::RunAsync([this, pid, t] {
+            Cloud::Instance().CommentColumn(pid, t);
+            FetchPublicColumns();
+            LoadPubDetail(pid);
+        });
+        m_pubCommentDraft.clear();
     } else {
-        m_pubCommentDraft = lj::ReadEditBuffer(m_pubCommentEdit);
+        m_pubCommentDraft = t;
     }
-    SendMessageW(m_pubCommentEdit, WM_SETREDRAW, TRUE, 0);
-    ShowWindow(m_pubCommentEdit, SW_HIDE);
+    m_pubCommentEdit = false;
 }
 
 void RoadmapView::SubmitPubComment()
@@ -1637,11 +1571,17 @@ void RoadmapView::PaintPubPreviewOverlay(Canvas& cv)
     cv.FillRoundRect(m_pubPvInput, shape::kEdgeSoft, WithAlpha(pal.paperLo, 0.7f));
     cv.StrokeRoundRect(m_pubPvInput, shape::kEdgeSoft, pal.rule, shape::kHair);
     TextStyle pt; pt.role = FontRole::Sans; pt.size = 12.5f; pt.vAlign = VAlign::Middle;
-    if (!m_pubCommentEdit) {
-        if (m_pubCommentDraft.empty())
-            cv.Text(L"写评论…", { m_pubPvInput.left + 12.0f, m_pubPvInput.top, m_pubPvInput.right - 12.0f, m_pubPvInput.bottom }, pt, pal.ink300);
-        else
-            cv.Text(m_pubCommentDraft, { m_pubPvInput.left + 12.0f, m_pubPvInput.top, m_pubPvInput.right - 12.0f, m_pubPvInput.bottom }, pt, pal.ink900);
+    {
+        D2D1_RECT_F tbox{ m_pubPvInput.left + 12.0f, m_pubPvInput.top,
+                          m_pubPvInput.right - 12.0f, m_pubPvInput.bottom };
+        if (m_pubCommentEdit) {
+            // v2 统一输入框：文字/光标/选区/IME 组合串全由 D3D 绘制
+            m_pubComment.Paint(cv, tbox, pt, pal.ink900, L"写评论…", pal.ink300, 0.0f, 0.0f);
+        } else if (m_pubCommentDraft.empty()) {
+            cv.Text(L"写评论…", tbox, pt, pal.ink300);
+        } else {
+            cv.Text(m_pubCommentDraft, tbox, pt, pal.ink900);
+        }
     }
     Btn(m_pubPvSend, L"发送", false, true);
     Btn(m_pubPvClose, L"关闭", false, false);

@@ -22,14 +22,19 @@ static std::wstring U2W(const std::string& s)
     return o;
 }
 
-// 复用看板娘本地凭据（单一来源：kanban_ai.json，刻意不参与云端同步）。
-// 该文件由看板娘设置面板写入；未配置则字段为空 → 视为未启用。
-static quiz::QuizAIConfig LoadKanbanAIConfig()
+// AI 出题凭据（单一来源：账户目录 ai.json，由设置页「练考」分区写入；
+// 本地独占、刻意不参与云端同步）。兼容迁移：旧版配置文件 kanban_ai.json
+// 作为回退，未配置则字段为空 → 视为未启用。
+static quiz::QuizAIConfig LoadLocalAIConfig()
 {
     quiz::QuizAIConfig cfg;
-    std::wstring path = AccountStore::Instance().CurrentRoot() + L"kanban_ai.json";
+    std::wstring root = AccountStore::Instance().CurrentRoot();
     std::string buf;
-    if (!lj::json::ReadFileRaw(path, buf) || buf.empty()) return cfg;
+    for (const wchar_t* name : { L"ai.json", L"kanban_ai.json" }) {
+        if (lj::json::ReadFileRaw(root + name, buf) && !buf.empty()) break;
+        buf.clear();
+    }
+    if (buf.empty()) return cfg;
     using namespace lj::json;
     Parser parser(buf.data(), buf.size());
     JVal v = parser.parse();
@@ -40,7 +45,7 @@ static quiz::QuizAIConfig LoadKanbanAIConfig()
     cfg.apiBase = get("apiBase");
     cfg.apiKey  = get("apiKey");
     cfg.model   = get("model");
-    if (cfg.model.empty()) cfg.model = L"deepseek-v4-flash";
+    if (cfg.model.empty()) cfg.model = L"deepseek-chat";
     cfg.enabled = !cfg.apiBase.empty() && !cfg.apiKey.empty();
     return cfg;
 }
@@ -159,13 +164,13 @@ void QuizScheduler::MaybeStart(bool manual)
         return;
     }
 
-    // 复用看板娘已填凭据（单一来源：kanban_ai.json 本地文件，不读 settings 层）
-    quiz::QuizAIConfig cfg = LoadKanbanAIConfig();
+    // AI 出题凭据（设置页「练考」分区写入的本地 ai.json）
+    quiz::QuizAIConfig cfg = LoadLocalAIConfig();
 
     if (!m_enabled || !cfg.enabled) {
         if (manual) {
             std::lock_guard<std::mutex> lk(m_mu);
-            m_last = { false, L"未配置 AI 凭据（请在看板娘设置面板填写 API 地址与密钥）",
+            m_last = { false, L"未配置 AI 凭据（请在设置页「练考」分区填写 API 地址与密钥）",
                        TodayISO(), (long long)time(nullptr) };
         }
         return;

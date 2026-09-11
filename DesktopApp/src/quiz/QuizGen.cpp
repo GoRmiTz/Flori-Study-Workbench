@@ -202,7 +202,7 @@ bool QuizGenerateDaily(const std::wstring& outDir,
 {
     errOut.clear();
     if (!cfg.enabled || cfg.apiBase.empty() || cfg.apiKey.empty()) {
-        errOut = L"未配置 AI 凭据（请在看板娘设置面板填写 API 地址与密钥）";
+        errOut = L"未配置 AI 凭据（请在设置页「练考」分区填写 API 地址与密钥）";
         return false;
     }
     int qcount = (questionCount < 1) ? 10 : (questionCount > 25 ? 25 : questionCount);

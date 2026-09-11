@@ -1,15 +1,13 @@
 // ============================================================
 //  SettingsView.cpp — 全局设置页（route=settings）
 //  由主窗口右上「用户名卡片」弹层中的「设置」项进入（TopBar 注入）。
-//  三分区：通用 / 看板娘 / 练考。
-//  持久化刻意走 CheckinStore::LoadSettings/SaveSettings 单一通道：
-//  它会同时写 settings.json（kanban 段）与本地独占的 kanban_ai.json，
-//  与 Kanban.cpp::SetKanbanSettings 完全同源，避免凭据漂移。
-//  看板娘 AI 凭据不入库、不进记忆，仅落本地盘。
+//  两分区：通用 / 练考（含 AI 出题凭据）。
+//  持久化刻意走 CheckinStore::LoadSettings/SaveSettings 单一通道；
+//  AI 凭据落账户目录 ai.json（本地独占，不参与云端同步）。
 // ============================================================
 #include "views/SettingsView.h"
 #include "core/Hwnd.h"
-#include "kanban/KanbanTypes.h"
+#include "app/AccountStore.h"
 #include <windows.h>
 #include <cstdio>
 #include <string>
@@ -21,26 +19,28 @@ namespace lj {
 // ---------------- 本地工具 ----------------
 static float Clamp01f(float v) { return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v); }
 
-static std::wstring FormatHM(int minutes)
+static std::wstring ToUtf8(const std::wstring& w)
 {
-    if (minutes < 0) minutes = 0;
-    if (minutes > 1439) minutes = 1439;
-    int h = minutes / 60, m = minutes % 60;
-    wchar_t buf[16];
-    swprintf_s(buf, L"%02d:%02d", h, m);
-    return buf;
+    int n = WideCharToMultiByte(CP_UTF8, 0, w.c_str(), (int)w.size(), nullptr, 0, nullptr, nullptr);
+    std::string u(n, '\0');
+    if (n > 0) WideCharToMultiByte(CP_UTF8, 0, w.c_str(), (int)w.size(), &u[0], n, nullptr, nullptr);
+    return std::wstring(u.begin(), u.end());   // 仅承载字节，写盘前按 char 取
 }
 
-static bool ParseHM(const std::wstring& s, int& out)
+static std::wstring Utf8ToWide(const std::string& s)
 {
-    int h = 0, m = 0;
-    if (swscanf_s(s.c_str(), L"%d:%d", &h, &m) == 2 ||
-        swscanf_s(s.c_str(), L"%d.%d", &h, &m) == 2) {
-        if (h < 0 || h > 23 || m < 0 || m > 59) return false;
-        out = h * 60 + m;
-        return true;
-    }
-    return false;
+    int wl = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), (int)s.size(), nullptr, 0);
+    std::wstring w(wl, L'\0');
+    if (wl > 0) MultiByteToWideChar(CP_UTF8, 0, s.c_str(), (int)s.size(), &w[0], wl);
+    return w;
+}
+
+static std::string ToUtf8Bytes(const std::wstring& w)
+{
+    int n = WideCharToMultiByte(CP_UTF8, 0, w.c_str(), (int)w.size(), nullptr, 0, nullptr, nullptr);
+    std::string u(n, '\0');
+    if (n > 0) WideCharToMultiByte(CP_UTF8, 0, w.c_str(), (int)w.size(), &u[0], n, nullptr, nullptr);
+    return u;
 }
 
 // 进程名规整：转小写并去掉 .exe（专注白名单按小写进程名匹配）
@@ -90,25 +90,49 @@ void SettingsView::Load()
         m_focusApps += s.focusApps[i];
     }
 
-    ReadKanban();
+    ReadAI();
 
     m_quiz = quiz::QuizStore::Instance().LoadSettings();
 }
 
-void SettingsView::ReadKanban()
+// ---------------- AI 出题凭据（本地 ai.json）----------------
+void SettingsView::ReadAI()
 {
-    AppSettings s = CheckinStore::Instance().LoadSettings();
-    m_kb.enabled = s.kanban.enabled;
-    m_kb.activeFrom = s.kanban.activeFrom;
-    m_kb.activeTo = s.kanban.activeTo;
-    m_kb.dailyTokenBudget = s.kanban.dailyTokenBudget;
-    m_kb.apiBase = s.kanban.apiBase;
-    m_kb.apiKey = s.kanban.apiKey;
-    m_kb.model = s.kanban.model.empty() ? L"deepseek-chat" : s.kanban.model;
-    m_kb.personaCute = (s.kanban.persona == kanban::Persona::Cute);
-    m_fromStr = FormatHM(m_kb.activeFrom);
-    m_toStr = FormatHM(m_kb.activeTo);
-    m_budgetStr = std::to_wstring(m_kb.dailyTokenBudget);
+    m_aiBase.clear(); m_aiKey.clear(); m_aiModel.clear();
+    // 兼容旧文件名：历史版本的 kanban_ai.json 作为底稿迁入
+    std::wstring root = AccountStore::Instance().CurrentRoot();
+    for (const wchar_t* name : { L"ai.json", L"kanban_ai.json" }) {
+        FILE* f = _wfopen((root + name).c_str(), L"rb");
+        if (!f) continue;
+        std::string buf;
+        char chunk[4096];
+        size_t n;
+        while ((n = fread(chunk, 1, sizeof(chunk), f)) > 0) buf.append(chunk, n);
+        fclose(f);
+        // 极简 JSON：只抓 apiBase / apiKey / model 三个字符串字段
+        auto grab = [&](const char* key) -> std::wstring {
+            std::string pat = std::string("\"") + key + "\":";
+            size_t p = buf.find(pat);
+            if (p == std::string::npos) return L"";
+            p = buf.find('"', p + pat.size());
+            if (p == std::string::npos) return L"";
+            std::string out;
+            for (++p; p < buf.size() && buf[p] != '"'; ++p) {
+                if (buf[p] == '\\' && p + 1 < buf.size()) { ++p; out += buf[p]; }
+                else out += buf[p];
+            }
+            return Utf8ToWide(out);
+        };
+        m_aiBase  = grab("apiBase");
+        m_aiKey   = grab("apiKey");
+        m_aiModel = grab("model");
+        if (!m_aiKey.empty() || !m_aiBase.empty()) {
+            if (wcscmp(name, L"ai.json") != 0) Apply();   // 首次从旧文件迁入 → 立即落新文件
+            break;
+        }
+        m_aiBase.clear(); m_aiKey.clear(); m_aiModel.clear();
+    }
+    if (m_aiModel.empty()) m_aiModel = L"deepseek-chat";
 }
 
 void SettingsView::Apply()
@@ -130,16 +154,19 @@ void SettingsView::Apply()
     if (!cur.empty()) s.focusApps.push_back(NormProc(cur));
     s.focusAppsSeeded = true;
 
-    // 看板娘：写回 kanban 段（SaveSettings 会同步落 kanban_ai.json）
-    s.kanban.enabled = m_kb.enabled;
-    s.kanban.activeFrom = m_kb.activeFrom;
-    s.kanban.activeTo = m_kb.activeTo;
-    s.kanban.dailyTokenBudget = m_kb.dailyTokenBudget;
-    s.kanban.apiBase = m_kb.apiBase;
-    s.kanban.apiKey = m_kb.apiKey;
-    s.kanban.model = m_kb.model.empty() ? L"deepseek-chat" : m_kb.model;
-    s.kanban.persona = m_kb.personaCute ? kanban::Persona::Cute : kanban::Persona::Tsundere;
     CheckinStore::Instance().SaveSettings(s);
+
+    // AI 出题凭据：落账户目录 ai.json（本地独占，不参与云端同步）
+    {
+        std::string out = "{\n";
+        out += "  \"apiBase\": \"" + ToUtf8Bytes(m_aiBase) + "\",\n";
+        out += "  \"apiKey\": \""  + ToUtf8Bytes(m_aiKey)  + "\",\n";
+        out += "  \"model\": \""   + ToUtf8Bytes(m_aiModel) + "\"\n";
+        out += "}\n";
+        std::wstring path = AccountStore::Instance().CurrentRoot() + L"ai.json";
+        FILE* f = _wfopen(path.c_str(), L"wb");
+        if (f) { fwrite(out.data(), 1, out.size(), f); fclose(f); }
+    }
 
     // 练考：落 quiz_settings.json 并即时推给调度器
     quiz::QuizSettings q = m_quiz;
@@ -158,27 +185,19 @@ void SettingsView::BuildRows()
                            .step = 1, .minv = 0, .maxv = 23, .unit = L"时", .sec = 0 });
     m_rows.push_back(SRow{ .type = SRow::Text, .label = L"专注白名单（逗号分隔，如 notepad）", .pStr = &m_focusApps, .sec = 0 });
 
-    // —— 1 看板娘 ——
-    m_rows.push_back(SRow{ .type = SRow::Toggle, .label = L"启用看板娘（绿井）", .pBool = &m_kb.enabled, .sec = 1 });
-    m_rows.push_back(SRow{ .type = SRow::Toggle, .label = L"人格模式", .pBool = &m_kb.personaCute,
-                           .onText = L"可爱", .offText = L"傲娇", .sec = 1 });
-    m_rows.push_back(SRow{ .type = SRow::Text, .label = L"API 地址", .pStr = &m_kb.apiBase, .tag = TAG_APIBASE, .sec = 1 });
-    m_rows.push_back(SRow{ .type = SRow::Text, .label = L"API 密钥", .pStr = &m_kb.apiKey, .password = true, .tag = TAG_APIKEY, .sec = 1 });
-    m_rows.push_back(SRow{ .type = SRow::Text, .label = L"模型名", .pStr = &m_kb.model, .tag = TAG_MODEL, .sec = 1 });
-    m_rows.push_back(SRow{ .type = SRow::Text, .label = L"活跃起（HH:MM）", .pStr = &m_fromStr, .tag = TAG_FROM, .sec = 1 });
-    m_rows.push_back(SRow{ .type = SRow::Text, .label = L"活跃止（HH:MM）", .pStr = &m_toStr, .tag = TAG_TO, .sec = 1 });
-    m_rows.push_back(SRow{ .type = SRow::Text, .label = L"每日额度（token）", .pStr = &m_budgetStr, .tag = TAG_BUDGET, .sec = 1 });
-
-    // —— 2 练考 ——
-    m_rows.push_back(SRow{ .type = SRow::Toggle, .label = L"启用每日练考", .pBool = &m_quiz.enabled, .sec = 2 });
+    // —— 1 练考（AI 出题凭据本地独占，不入库不上云）——
+    m_rows.push_back(SRow{ .type = SRow::Toggle, .label = L"启用每日练考", .pBool = &m_quiz.enabled, .sec = 1 });
     m_rows.push_back(SRow{ .type = SRow::Stepper, .label = L"出题时刻（时）", .pInt = &m_quiz.hour,
-                           .step = 1, .minv = 0, .maxv = 23, .unit = L"时", .sec = 2 });
+                           .step = 1, .minv = 0, .maxv = 23, .unit = L"时", .sec = 1 });
     m_rows.push_back(SRow{ .type = SRow::Stepper, .label = L"出题时刻（分）", .pInt = &m_quiz.minute,
-                           .step = 5, .minv = 0, .maxv = 59, .unit = L"分", .sec = 2 });
+                           .step = 5, .minv = 0, .maxv = 59, .unit = L"分", .sec = 1 });
     m_rows.push_back(SRow{ .type = SRow::Stepper, .label = L"题量", .pInt = &m_quiz.qcount,
-                           .step = 1, .minv = 1, .maxv = 50, .unit = L"题", .sec = 2 });
-    m_rows.push_back(SRow{ .type = SRow::Toggle, .label = L"抓取 RSS 资讯", .pBool = &m_quiz.rss, .sec = 2 });
-    m_rows.push_back(SRow{ .type = SRow::Text, .label = L"知识类别", .pStr = &m_quiz.category, .tag = TAG_CAT, .sec = 2 });
+                           .step = 1, .minv = 1, .maxv = 50, .unit = L"题", .sec = 1 });
+    m_rows.push_back(SRow{ .type = SRow::Toggle, .label = L"抓取 RSS 资讯", .pBool = &m_quiz.rss, .sec = 1 });
+    m_rows.push_back(SRow{ .type = SRow::Text, .label = L"知识类别", .pStr = &m_quiz.category, .tag = TAG_CAT, .sec = 1 });
+    m_rows.push_back(SRow{ .type = SRow::Text, .label = L"AI API 地址", .pStr = &m_aiBase, .tag = TAG_AIBASE, .sec = 1 });
+    m_rows.push_back(SRow{ .type = SRow::Text, .label = L"AI API 密钥", .pStr = &m_aiKey, .password = true, .tag = TAG_AIKEY, .sec = 1 });
+    m_rows.push_back(SRow{ .type = SRow::Text, .label = L"AI 模型名", .pStr = &m_aiModel, .tag = TAG_AIMODEL, .sec = 1 });
 }
 
 // ---------------- 布局 ----------------
@@ -198,11 +217,11 @@ void SettingsView::Layout(const D2D1_RECT_F& area, Canvas& cv)
     m_header = { x0, y, x0 + contentW, y + 64.0f };
     y = m_header.bottom + 16.0f;
 
-    int counts[3] = { 0, 0, 0 };
+    int counts[2] = { 0, 0 };
     for (auto& r : m_rows) counts[r.sec]++;
 
     const float rowH = 50.0f, titleH = 40.0f, padB = 14.0f, gap = 16.0f;
-    for (int sec = 0; sec < 3; ++sec) {
+    for (int sec = 0; sec < 2; ++sec) {
         int n = counts[sec];
         float cardH = titleH + (float)n * rowH + padB;
         D2D1_RECT_F card = { x0, y, x0 + contentW, y + cardH };
@@ -239,7 +258,6 @@ void SettingsView::Update(float dt, const Input& in)
 {
     View::Update(dt, in);
     if (m_editing) m_caretT += dt;
-    m_caretOn = ((int)(m_caretT * 2.0f) % 2) == 0;
 
     float mx = in.mouseX;
     float my = in.mouseY + ScrollY();
@@ -308,24 +326,14 @@ void SettingsView::CommitEdit()
     m_edit.End(true, buf);
     if (m_active) {
         switch (m_active->tag) {
-            case TAG_FROM: { int m = 0; if (ParseHM(buf, m)) m_kb.activeFrom = m; break; }
-            case TAG_TO:   { int m = 0; if (ParseHM(buf, m)) m_kb.activeTo = m; break; }
-            case TAG_BUDGET: {
-                int v = 0;
-                if (!buf.empty()) { try { v = std::stoi(buf); } catch (...) { v = 0; } }
-                m_kb.dailyTokenBudget = (std::max)(0, v);
-                break;
-            }
+            case TAG_AIBASE:  m_aiBase = buf; break;
+            case TAG_AIKEY:   m_aiKey = buf; break;
+            case TAG_AIMODEL: m_aiModel = buf.empty() ? L"deepseek-chat" : buf; break;
             default:
                 if (m_active->pStr) *m_active->pStr = buf;
                 break;
         }
     }
-    // 重算显示字符串（HH:MM / 数值）
-    m_fromStr = FormatHM(m_kb.activeFrom);
-    m_toStr = FormatHM(m_kb.activeTo);
-    m_budgetStr = std::to_wstring(m_kb.dailyTokenBudget);
-
     m_editing = false;
     m_active = nullptr;
     Apply();
@@ -353,8 +361,8 @@ void SettingsView::Paint(Canvas& cv)
     TextStyle hs; hs.role = FontRole::Mono; hs.size = 11.0f; hs.letterSpacing = 2.0f; hs.weight = DWRITE_FONT_WEIGHT_BOLD;
     cv.Text(L"SETTINGS · 全局设置", { m_header.left, m_header.top + 38.0f, m_header.right, m_header.top + 54.0f }, hs, pal.ink300);
 
-    const wchar_t* titles[3] = { L"SECTION · 通用", L"SECTION · 看板娘", L"SECTION · 练考" };
-    for (int sec = 0; sec < 3; ++sec) {
+    const wchar_t* titles[2] = { L"SECTION · 通用", L"SECTION · 练考" };
+    for (int sec = 0; sec < 2; ++sec) {
         D2D1_RECT_F card = m_secCards[sec];
         cv.FillRoundRect(card, shape::kEdge, pal.paperHi);
         cv.StrokeRoundRect(card, shape::kEdge, pal.rule, shape::kHair);
@@ -402,11 +410,11 @@ void SettingsView::PaintStepper(Canvas& cv, SRow& r, const Palette& pal)
     std::wstring val = std::to_wstring(r.pInt ? *r.pInt : 0) + (r.unit.empty() ? L"" : (L" " + r.unit));
     cv.Text(val, r.value, ts, pal.ink900);
 
-    PaintStepBtn(cv, r.dec, L"\u2212", pal);  // −
-    PaintStepBtn(cv, r.inc, L"+", pal);
+    PaintStepBtn2(cv, r.dec, L"\u2212", pal);  // −
+    PaintStepBtn2(cv, r.inc, L"+", pal);
 }
 
-void SettingsView::PaintStepBtn(Canvas& cv, const D2D1_RECT_F& r, const wchar_t* sym, const Palette& pal)
+void SettingsView::PaintStepBtn2(Canvas& cv, const D2D1_RECT_F& r, const wchar_t* sym, const Palette& pal)
 {
     cv.FillRoundRect(r, shape::kEdgeSoft, pal.paperLo);
     cv.StrokeRoundRect(r, shape::kEdgeSoft, pal.rule, shape::kHair);

@@ -139,11 +139,11 @@ void RoomView::OnLeave()
     rt->Off("music:list");
     rt->LeaveRoom();
     g_studyRoomOnline = 0;   // F-D2 浮层：离房即无在线计数
-    if (m_chatEditHwnd) ShowWindow(m_chatEditHwnd, SW_HIDE);   // 收起输入代理
+    if (m_chatEdit) m_chatBox.Cancel();      // 收起输入框
     m_chatEdit = false;
     m_compose.clear();
-    // #71 白名单弹层随视图关闭，代理窗一并收起，避免残留在其它页面上收键盘
-    if (m_wlEditHwnd) ShowWindow(m_wlEditHwnd, SW_HIDE);
+    // #71 白名单弹层随视图关闭，输入框一并收起，避免残留在其它页面上收键盘
+    if (m_wlEdit) m_wl.Cancel();
     m_wlEdit = false;
     m_wlOpen = false;
     m_wlA.Snap(0.0f);
@@ -151,149 +151,27 @@ void RoomView::OnLeave()
 }
 
 // ============================================================
-//  聊天输入（隐藏 EDIT 代理承载 IME，文字/光标由 D3D 自绘）
+//  聊天输入（v2 统一输入框：1×1 透明代理承载 IME，文字/光标由 D3D 自绘）
 // ============================================================
-LRESULT CALLBACK RoomView::ChatEditProc(HWND w, UINT msg, WPARAM wp, LPARAM lp)
-{
-    RoomView* self = (RoomView*)GetWindowLongPtrW(w, GWLP_USERDATA);
-    if (self) {
-        if (msg == WM_KEYDOWN) {
-            // 组合中回车/ESC 属于输入法（选字/撤销候选），必须让 IME 先吃掉，不能当成发送
-            if (self->m_imeComp.empty()) {
-                if (wp == VK_RETURN) { self->EndChatEdit(true); return 0; }   // Enter 发送
-                if (wp == VK_ESCAPE) { SetWindowTextW(w, L""); self->EndChatEdit(false); return 0; } // Esc 清空退出
-            }
-        } else if (msg == WM_SETFOCUS) {
-            int len = GetWindowTextLengthW(w);
-            SendMessageW(w, EM_SETSEL, (WPARAM)len, (LPARAM)len);   // 焦点时光标置文末
-        } else if (msg == WM_KILLFOCUS) {
-            // 失焦（点外部/点发送按钮）→ 退出编辑但保留文本，发送按钮再读 m_compose 发送
-            self->EndChatEdit(false);
-        }
-    }
-    WNDPROC old = self ? self->m_chatEditOld : nullptr;
-    LRESULT r = old ? CallWindowProcW(old, w, msg, wp, lp) : DefWindowProcW(w, msg, wp, lp);
-
-    // ---- P1-2 中文 IME 合成 ----
-    // 交给 EDIT 处理后再读 IME 上下文：结果串已由 EDIT 落入文本缓冲，
-    // 未提交的组合串仍留在上下文里，取出来交给 D2D 自绘（否则打拼音全程不可见）。
-    if (self) {
-        if (msg == WM_IME_STARTCOMPOSITION) {
-            self->m_imeComp.clear(); self->m_imeCompCaret = 0;
-            lj::ImeSetCandidatePos(self->m_chatEditHwnd,
-                self->m_imeAnchorX - self->m_chatInputRect.left,
-                self->m_chatInputRect.bottom - self->m_chatInputRect.top, AppDpi());
-        } else if (msg == WM_IME_COMPOSITION) {
-            if (lj::ImeReadComposition(w, self->m_imeComp, self->m_imeCompCaret)) {
-                lj::ImeSetCandidatePos(self->m_chatEditHwnd,
-                    self->m_imeAnchorX - self->m_chatInputRect.left,
-                    self->m_chatInputRect.bottom - self->m_chatInputRect.top, AppDpi());
-            }
-            if (lp & GCS_RESULTSTR) self->m_imeComp.clear();
-        } else if (msg == WM_IME_ENDCOMPOSITION) {
-            self->m_imeComp.clear(); self->m_imeCompCaret = 0;
-        } else if (msg == WM_IME_SETCONTEXT) {
-            lj::ImeSetCandidatePos(self->m_chatEditHwnd,
-                self->m_imeAnchorX - self->m_chatInputRect.left,
-                self->m_chatInputRect.bottom - self->m_chatInputRect.top, AppDpi());
-        }
-    }
-
-    // 隐藏代理 EDIT 的原生系统光标：我们用 D3D 自绘光标，否则原生光标会在输入框处闪一下
-    if (msg == WM_SETFOCUS || msg == WM_KEYDOWN || msg == WM_CHAR ||
-        msg == WM_IME_STARTCOMPOSITION || msg == WM_IME_COMPOSITION || msg == WM_IME_CHAR)
-        HideCaret(w);
-    return r;
-}
-
-// 代理窗跟随页面滚动。m_chatInputRect 是文档坐标，屏幕位置 = 文档坐标 − ScrollY；
-// 不减这一项，页面一滚代理窗就留在原地：鼠标点不中、候选窗也会飘到别处。
-void RoomView::SyncChatEditorRect()
-{
-    if (!m_chatEditHwnd) return;
-    float s = (float)AppDpi() / 96.0f;
-    int L = (int)(m_chatInputRect.left * s);
-    int T = (int)((m_chatInputRect.top - ScrollY()) * s);
-    int W = (int)((m_chatInputRect.right - m_chatInputRect.left) * s);
-    int H = (int)((m_chatInputRect.bottom - m_chatInputRect.top) * s);
-    if (W < 1) W = 1;
-    if (H < 1) H = 1;
-    if (L == m_chatEditPlaced[0] && T == m_chatEditPlaced[1] &&
-        W == m_chatEditPlaced[2] && H == m_chatEditPlaced[3]) return;   // 未变则不动，避免每帧 SetWindowPos
-    SetWindowPos(m_chatEditHwnd, nullptr, L, T, W, H, SWP_NOZORDER);
-    m_chatEditPlaced[0] = L; m_chatEditPlaced[1] = T;
-    m_chatEditPlaced[2] = W; m_chatEditPlaced[3] = H;
-}
-
-void RoomView::EnsureChatEditor()
-{
-    if (m_chatEditHwnd) return;
-    HWND parent = AppHwnd();
-    if (!parent) return;
-    // 不加 WS_EX_TRANSPARENT：编辑态铺成输入框全尺寸收鼠标（点击定位/拖拽框选），
-    // 配合 WM_SETREDRAW(FALSE) 不自绘——文字/光标/选区全由 D3D 绘制。
-    m_chatEditHwnd = CreateWindowExW(0, L"EDIT", L"",
-                                     WS_CHILD | ES_AUTOHSCROLL | ES_LEFT,
-                                     0, 0, 10, 10, parent, nullptr,
-                                     (HINSTANCE)GetWindowLongPtrW(parent, GWLP_HINSTANCE), nullptr);
-    if (!m_chatEditHwnd) return;
-    m_chatEditOld = (WNDPROC)SetWindowLongPtrW(m_chatEditHwnd, GWLP_WNDPROC, (LONG_PTR)ChatEditProc);
-    SetWindowLongPtrW(m_chatEditHwnd, GWLP_USERDATA, (LONG_PTR)this);
-    m_chatEditFont = CreateFontW(-16, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-                                 DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                                 DEFAULT_QUALITY, DEFAULT_PITCH | FF_DONTCARE,
-                                 L"Microsoft YaHei UI");
-    if (m_chatEditFont) SendMessageW(m_chatEditHwnd, WM_SETFONT, (WPARAM)m_chatEditFont, TRUE);
-    ShowWindow(m_chatEditHwnd, SW_HIDE);
-}
-
 void RoomView::BeginChatEdit()
 {
-    EnsureChatEditor();
-    if (!m_chatEditHwnd) return;
-    // 输入框编辑态背板是 paperHi，代理背景与其一致 → 无缝（代理本身 1x1 透明）
-    lj::SetEditBackdrop(AppPalette().paperHi);
-    SetWindowTextW(m_chatEditHwnd, m_compose.c_str());
-    // 编辑框铺满输入框全尺寸（内部处理鼠标点击定位/拖拽框选），
-    // WM_SETREDRAW(FALSE) 禁止自绘——可见文字/光标/选区全由 D3D 绘制。
-    m_chatEditPlaced[0] = -1;    // 强制重放一次（进编辑态时页面可能已滚动）
-    SyncChatEditorRect();
-    SendMessageW(m_chatEditHwnd, WM_SETREDRAW, FALSE, 0);
-    ShowWindow(m_chatEditHwnd, SW_SHOW);
-    SetFocus(m_chatEditHwnd);
-    int len = GetWindowTextLengthW(m_chatEditHwnd);
-    SendMessageW(m_chatEditHwnd, EM_SETSEL, (WPARAM)len, (LPARAM)len);
-    // IME 组合字号跟随输入框文字（12.5 DIP → 物理像素），否则候选窗字号与界面脱节
-    LOGFONTW lf{};
-    lf.lfHeight = -(LONG)(12.5f * (float)AppDpi() / 96.0f);
-    lf.lfCharSet = DEFAULT_CHARSET;
-    wcscpy_s(lf.lfFaceName, L"Microsoft YaHei UI");
-    if (HIMC himc = ImmGetContext(m_chatEditHwnd)) {
-        ImmSetCompositionFontW(himc, &lf);
-        ImmReleaseContext(m_chatEditHwnd, himc);
-    }
-    m_imeComp.clear(); m_imeCompCaret = 0;
-    m_imeAnchorX = m_chatInputRect.left + 12.0f;   // 首帧锚点：文字起点（Paint 会立刻校正）
-    lj::ImeSetCandidatePos(m_chatEditHwnd,
-        m_imeAnchorX - m_chatInputRect.left,
-        m_chatInputRect.bottom - m_chatInputRect.top, AppDpi());
+    m_chatEdit = true;
+    // 1×1 透明代理只收键盘 + IME，输入框上无任何 GDI 子窗口（无白块）
+    m_chatBox.onEnter     = [this] { EndChatEdit(true);  };   // Enter 发送
+    m_chatBox.onEsc       = [this] { m_compose.clear(); EndChatEdit(false); }; // Esc 清空退出
+    m_chatBox.onKillFocus = [this] { EndChatEdit(false); };   // 失焦保留文本
+    m_chatBox.Begin(m_compose, false, 12.5f);
 }
 
 void RoomView::EndChatEdit(bool send)
 {
-    if (m_chatEditHwnd) {
-        // 退出编辑时若仍在组合中，先取消合成——否则候选窗会遗留在屏幕上
-        if (!m_imeComp.empty()) lj::ImeCancelComposition(m_chatEditHwnd);
-        m_imeComp.clear(); m_imeCompCaret = 0;
-        if (send) {
-            std::wstring text = ReadEditBuffer(m_chatEditHwnd);
-            if (!text.empty()) Realtime::Instance().SendChat(net::ToUtf8(text));
-            m_compose.clear();
-        } else {
-            m_compose = ReadEditBuffer(m_chatEditHwnd);   // 保留文本：点回来继续编辑/发送
-        }
-        SendMessageW(m_chatEditHwnd, WM_SETREDRAW, TRUE, 0);   // 恢复自绘能力（隐藏后不再画）
-        ShowWindow(m_chatEditHwnd, SW_HIDE);
+    std::wstring t;
+    m_chatBox.End(true, t);
+    if (send) {
+        if (!t.empty()) Realtime::Instance().SendChat(net::ToUtf8(t));
+        m_compose.clear();
+    } else {
+        m_compose = t;   // 保留文本：点回来继续编辑/发送
     }
     m_chatEdit = false;
 }
@@ -356,7 +234,7 @@ void RoomView::WlCommit()
 
 void RoomView::WlAddText()
 {
-    std::wstring raw = m_wlEditHwnd ? ReadEditBuffer(m_wlEditHwnd) : m_wlText;
+    std::wstring raw = m_wlEdit ? m_wl.Text() : m_wlText;
     // 允许一次填多个：空格 / 英文逗号 / 中文逗号 / 顿号 / 分号 分隔
     std::vector<std::wstring> toks;
     std::wstring cur;
@@ -376,7 +254,7 @@ void RoomView::WlAddText()
         added++;
     }
 
-    if (m_wlEditHwnd) { SetWindowTextW(m_wlEditHwnd, L""); SendMessageW(m_wlEditHwnd, EM_SETSEL, 0, 0); }
+    if (m_wlEdit) m_wl.Clear();   // 清空输入框，连续添加不退出编辑态
     m_wlText.clear();
 
     if (added > 0) {
@@ -411,93 +289,22 @@ void RoomView::WlAddCurrentForeground()
     m_wlHintT = 2.4f;
 }
 
-// ---- 白名单输入代理（隐藏 EDIT；面板固定于屏幕坐标，不随页面滚动）----
-LRESULT CALLBACK RoomView::WlEditProc(HWND w, UINT msg, WPARAM wp, LPARAM lp)
-{
-    RoomView* self = (RoomView*)GetWindowLongPtrW(w, GWLP_USERDATA);
-    if (self) {
-        if (msg == WM_KEYDOWN && self->m_wlComp.empty()) {
-            if (wp == VK_RETURN) { self->WlAddText(); return 0; }          // 回车即添加
-            if (wp == VK_ESCAPE) { SetWindowTextW(w, L""); self->EndWlEdit(); return 0; }
-        } else if (msg == WM_SETFOCUS) {
-            int len = GetWindowTextLengthW(w);
-            SendMessageW(w, EM_SETSEL, (WPARAM)len, (LPARAM)len);
-        } else if (msg == WM_KILLFOCUS) {
-            self->m_wlEdit = false;   // 保留文本，点回来继续编辑
-        }
-    }
-    WNDPROC old = self ? self->m_wlEditOld : nullptr;
-    LRESULT r = old ? CallWindowProcW(old, w, msg, wp, lp) : DefWindowProcW(w, msg, wp, lp);
-
-    // 中文 IME 组合串自绘（代理已 WM_SETREDRAW(FALSE)，不画就一片空白）；
-    // 代理窗铺满输入框，候选窗默认贴其左上角即正确位置，无需额外定位。
-    if (self) {
-        if (msg == WM_IME_STARTCOMPOSITION) { self->m_wlComp.clear(); self->m_wlCompCaret = 0; }
-        else if (msg == WM_IME_COMPOSITION) {
-            lj::ImeReadComposition(w, self->m_wlComp, self->m_wlCompCaret);
-            if (lp & GCS_RESULTSTR) self->m_wlComp.clear();
-        } else if (msg == WM_IME_ENDCOMPOSITION) { self->m_wlComp.clear(); self->m_wlCompCaret = 0; }
-    }
-
-    if (msg == WM_SETFOCUS || msg == WM_KEYDOWN || msg == WM_CHAR ||
-        msg == WM_IME_STARTCOMPOSITION || msg == WM_IME_COMPOSITION || msg == WM_IME_CHAR)
-        HideCaret(w);
-    return r;
-}
-
-void RoomView::EnsureWlEditor()
-{
-    if (m_wlEditHwnd) return;
-    HWND parent = AppHwnd();
-    if (!parent) return;
-    m_wlEditHwnd = CreateWindowExW(0, L"EDIT", L"",
-                                   WS_CHILD | ES_AUTOHSCROLL | ES_LEFT,
-                                   0, 0, 10, 10, parent, nullptr,
-                                   (HINSTANCE)GetWindowLongPtrW(parent, GWLP_HINSTANCE), nullptr);
-    if (!m_wlEditHwnd) return;
-    m_wlEditOld = (WNDPROC)SetWindowLongPtrW(m_wlEditHwnd, GWLP_WNDPROC, (LONG_PTR)WlEditProc);
-    SetWindowLongPtrW(m_wlEditHwnd, GWLP_USERDATA, (LONG_PTR)this);
-    m_wlEditFont = CreateFontW(-16, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-                               DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                               DEFAULT_QUALITY, DEFAULT_PITCH | FF_DONTCARE,
-                               L"Microsoft YaHei UI");
-    if (m_wlEditFont) SendMessageW(m_wlEditHwnd, WM_SETFONT, (WPARAM)m_wlEditFont, TRUE);
-    ShowWindow(m_wlEditHwnd, SW_HIDE);
-}
-
+// ---- 白名单输入框（v2 统一输入框；面板固定于屏幕坐标，不随页面滚动）----
 void RoomView::BeginWlEdit()
 {
-    EnsureWlEditor();
-    if (!m_wlEditHwnd) return;
-    lj::SetEditBackdrop(AppPalette().paperHi);
-    SetWindowTextW(m_wlEditHwnd, m_wlText.c_str());
-
-    float s = (float)AppDpi() / 96.0f;
-    int L = (int)(m_wlInputRect.left * s);
-    int T = (int)(m_wlInputRect.top * s);
-    int W = (int)((m_wlInputRect.right - m_wlInputRect.left) * s);
-    int H = (int)((m_wlInputRect.bottom - m_wlInputRect.top) * s);
-    if (W < 1) W = 1;
-    if (H < 1) H = 1;
-    SetWindowPos(m_wlEditHwnd, nullptr, L, T, W, H, SWP_NOZORDER);
-
-    SendMessageW(m_wlEditHwnd, WM_SETREDRAW, FALSE, 0);
-    ShowWindow(m_wlEditHwnd, SW_SHOW);
-    SetFocus(m_wlEditHwnd);
-    int len = GetWindowTextLengthW(m_wlEditHwnd);
-    SendMessageW(m_wlEditHwnd, EM_SETSEL, (WPARAM)len, (LPARAM)len);
-    m_wlComp.clear(); m_wlCompCaret = 0;
+    m_wlEdit = true;
+    // 1×1 透明代理只收键盘 + IME（无白块）；文字/光标/组合串由 D3D 自绘
+    m_wl.onEnter     = [this] { WlAddText(); };        // 回车即添加
+    m_wl.onEsc       = [this] { m_wlText.clear(); EndWlEdit(); };
+    m_wl.onKillFocus = [this] { EndWlEdit(); };        // 失焦保留文本
+    m_wl.Begin(m_wlText, false, 13.0f);
 }
 
 void RoomView::EndWlEdit()
 {
-    if (m_wlEditHwnd) {
-        if (!m_wlComp.empty()) lj::ImeCancelComposition(m_wlEditHwnd);
-        m_wlComp.clear(); m_wlCompCaret = 0;
-        m_wlText = ReadEditBuffer(m_wlEditHwnd);
-        SendMessageW(m_wlEditHwnd, WM_SETREDRAW, TRUE, 0);
-        ShowWindow(m_wlEditHwnd, SW_HIDE);
-    }
+    std::wstring t;
+    m_wl.End(true, t);
+    m_wlText = t;
     m_wlEdit = false;
 }
 
@@ -608,7 +415,14 @@ void RoomView::UpdateWhitelist(float dt, const Input& in)
         if (!inPanel) { CloseWhitelist(); return; }
     }
 
-    if (m_wlEdit && m_wlEditHwnd) m_wlText = ReadEditBuffer(m_wlEditHwnd);
+    // 编辑态：鼠标先交给输入框（点击定位光标 / 拖拽框选）；点输入框外由失焦回调提交
+    if (m_wlEdit && m_cvCached) {
+        TextStyle is; is.role = FontRole::Sans; is.size = 13.0f; is.vAlign = VAlign::Middle;
+        D2D1_RECT_F tbox{ m_wlInputRect.left + 12.0f, m_wlInputRect.top,
+                          m_wlInputRect.right - 12.0f, m_wlInputRect.bottom };
+        m_wl.HandleMouse(in, *m_cvCached, tbox, is, 0.0f);
+        m_wlText = m_wl.Text();   // 实时同步，供绘制
+    }
 }
 
 void RoomView::PaintWhitelist(Canvas& cv)
@@ -651,8 +465,9 @@ void RoomView::PaintWhitelist(Canvas& cv)
     D2D1_RECT_F tbox{ m_wlInputRect.left + 12.0f, m_wlInputRect.top,
                       m_wlInputRect.right - 12.0f, m_wlInputRect.bottom };
     if (editing) {
-        PaintFieldEditIme(cv, tbox, is, m_wlText, EditCaretPos(m_wlEditHwnd),
-                          m_wlComp, m_wlCompCaret, pal.ink900, 0.0f);
+        // v2 统一输入框：文字/光标/选区/IME 组合串全由 D3D 绘制
+        m_wl.Paint(cv, tbox, is, pal.ink900, L"输入进程名后回车，如 potplayer / chrome.exe（可空格分隔多个）",
+                   WithAlpha(pal.ink300, 0.95f), 0.0f, 0.0f);
     } else if (!m_wlText.empty()) {
         cv.Text(m_wlText, tbox, is, pal.ink900);
     } else {
@@ -852,17 +667,15 @@ void RoomView::BuildRoomWidgets()
     for (auto* w : m_overlayWidgets) w->StartEnter(0.0f);
 
     // §3 聊天发送按钮
-    // 直接读隐藏 EDIT 代理的文本发送（不依赖 m_compose 同步时序），
-    // 发送后清空代理、保持编辑态可继续输入；点输入框外部才退出编辑。
+    // 编辑中直接读输入框缓冲发送（不依赖 m_compose 同步时序），发送后清空缓冲、
+    // 保持编辑态可连续输入；点输入框外部才退出编辑。
     m_sendBtn.label = L"发送"; m_sendBtn.fontSize = 13.0f;
     m_sendBtn.onClick = [this] {
-        if (!m_chatEditHwnd) return;
-        std::wstring text = ReadEditBuffer(m_chatEditHwnd);
+        if (!m_chatEdit) return;
+        std::wstring text = m_chatBox.Text();
         if (!text.empty()) Realtime::Instance().SendChat(net::ToUtf8(text));
         m_compose.clear();
-        // 清空代理文本与光标：连续发送不退出编辑态
-        SetWindowTextW(m_chatEditHwnd, L"");
-        SendMessageW(m_chatEditHwnd, EM_SETSEL, 0, 0);
+        m_chatBox.Clear();   // 清空缓冲与光标：连续发送不退出编辑态
     };
     m_sendBtn.StartEnter(0.0f);
 
@@ -955,6 +768,7 @@ void RoomView::RecomputeStats()
 void RoomView::Layout(const D2D1_RECT_F& area, Canvas& cv)
 {
     View::Layout(area, cv);
+    m_cvCached = &cv;
     if (m_inRoom) {
         if (!m_roomBuilt) BuildRoomWidgets();
         LayoutRoom(area, cv);
@@ -1237,19 +1051,21 @@ void RoomView::Update(float dt, const Input& in)
     }
 
     // ---- §3 聊天输入（房间内且非静音房）----
-    // 输入由隐藏 EDIT 代理接管（含中文 IME）：点击进编辑，Enter 发送，Esc 清空退出，
-    // 失焦保留文本；这里只负责进入编辑态 + 每帧同步显示缓冲。
+    // v2 统一输入框：点击进编辑（HandleMouse 处理光标定位/框选），Enter 发送，
+    // Esc 清空退出，失焦保留文本。
     if (m_inRoom && m_room != L"silent" && !active) {
+        if (m_chatEdit && m_cvCached) {
+            TextStyle pt; pt.role = FontRole::Sans; pt.size = 12.5f; pt.vAlign = VAlign::Middle;
+            D2D1_RECT_F tbox{ m_chatInputRect.left + 12.0f, m_chatInputRect.top,
+                              m_chatInputRect.right - 12.0f, m_chatInputRect.bottom };
+            bool inside = m_chatBox.HandleMouse(in, *m_cvCached, tbox, pt, ScrollY());
+            if (!inside && in.clicked) EndChatEdit(false);   // 点输入框外退出编辑（保留文本）
+        }
         if (in.clicked) {
             float sy = in.mouseY + ScrollY();
             bool hit = (in.mouseX >= m_chatInputRect.left && in.mouseX <= m_chatInputRect.right &&
                         sy >= m_chatInputRect.top && sy <= m_chatInputRect.bottom);
-            if (hit && !m_chatEdit) { m_chatEdit = true; BeginChatEdit(); }
-            // 点外部：EDIT 失焦（WM_KILLFOCUS → EndChatEdit(false)），这里不用管
-        }
-        if (m_chatEdit && m_chatEditHwnd) {
-            m_compose = ReadEditBuffer(m_chatEditHwnd);   // 每帧同步已提交文本，供绘制
-            SyncChatEditorRect();                         // 跟随滚动，保证点击命中与候选窗定位
+            if (hit && !m_chatEdit) { BeginChatEdit(); }
         }
     }
 }
@@ -1734,26 +1550,12 @@ void RoomView::PaintChat(Canvas& cv)
                            m_chatEdit ? shape::kStroke : shape::kHair);
         TextStyle pt; pt.role = FontRole::Sans; pt.size = 12.5f; pt.vAlign = VAlign::Middle;
         D2D1_RECT_F txt{ inp.left + 12.0f, inp.top, inp.right - 12.0f, inp.bottom };
-        if (m_compose.empty() && !m_chatEdit && m_imeComp.empty()) {
+        if (m_chatEdit) {
+            // v2 统一输入框：文字/光标/选区/IME 组合串全由 D3D 绘制（无白块）
+            m_chatBox.Paint(cv, txt, pt, pal.ink900,
+                         L"说点什么…（同自习室可见）", pal.ink300, 0.0f, ScrollY());
+        } else if (m_compose.empty()) {
             cv.Text(L"说点什么…（同自习室可见）", txt, pt, pal.ink300);
-        } else if (m_chatEdit) {
-            if (!m_imeComp.empty()) {
-                // 组合中：已提交文本 + 未提交拼音（虚线下划线）一并自绘，
-                // 并把组合串起点记为候选窗锚点（文档坐标 DIP）。
-                m_imeAnchorX = PaintFieldEditIme(cv, txt, pt, m_compose,
-                                                 EditCaretPos(m_chatEditHwnd),
-                                                 m_imeComp, m_imeCompCaret,
-                                                 pal.ink900, 0.0f);
-            } else {
-                // 编辑态：文字与光标由 PaintFieldEdit 绘制（光标位置取自隐藏代理）
-                int sa = -1, sb = -1;
-                lj::EditSelRange(m_chatEditHwnd, sa, sb);
-                PaintFieldEdit(cv, txt, pt, m_compose, pal.ink900, EditCaretPos(m_chatEditHwnd), 0.0f, sa, sb);
-                // 无组合时锚点跟着插入点走，下次起合成即从此处弹候选
-                int cp = EditCaretPos(m_chatEditHwnd);
-                if (cp < 0 || cp >(int)m_compose.size()) cp = (int)m_compose.size();
-                m_imeAnchorX = txt.left + cv.MeasureWidth(m_compose.substr(0, (size_t)cp), pt);
-            }
         } else {
             cv.Text(m_compose, txt, pt, pal.ink900);
         }

@@ -4,7 +4,7 @@
 //  仿 ReviewNudge：独立 message-only 窗口 + 60s 定时器；每日定时（默认 07:30）
 //  校验 AI 配置 / 访客 / 文件去重 / 冷却后，后台线程抓 RSS + 调 QuizGen 落盘。
 //  不阻塞主线程：网络与写盘均在后台线程；主线程只读 m_last / m_busy。
-//  依赖：QuizGen / QuizRss / Store（看板娘凭据）/ AccountStore（当前账户目录）。
+//  依赖：QuizGen / QuizRss / AccountStore（当前账户目录）。
 // ============================================================
 #include <windows.h>
 #include <string>

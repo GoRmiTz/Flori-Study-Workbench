@@ -408,7 +408,7 @@ void App::BuildViews()
     add(std::make_unique<ExamReportView>());// F-D6 考场模式：模考报告 / 开始入口
     add(std::make_unique<ReviewView>());     // F-D7 本地复盘搭子（规则版）
     add(std::make_unique<QuizView>());       // 练考模块 Phase 1（阅读器 + 答题卡）
-    add(std::make_unique<SettingsView>());    // 全局设置页（账户弹层「设置」进入，整合 通用/看板娘/练考）
+    add(std::make_unique<SettingsView>());    // 全局设置页（账户弹层「设置」进入，整合 通用/练考）
     add(std::make_unique<LoginView>());    // 登录 / 注册 / 访客入口（退出登录 / 未登录点胶囊都要跳到这里）
 }
 

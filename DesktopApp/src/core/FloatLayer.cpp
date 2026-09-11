@@ -218,7 +218,7 @@ bool FloatLayer::Create(HWND owner, HINSTANCE hInst, float scale)
     LogLine(L"[float] CreateWindowEx OK hwnd=%p", (void*)m_hwnd);
 
     PositionToCorner();
-    m_visible = false;   // 默认隐藏：由看板娘悬停（ShowWithFade）驱动显示
+    m_visible = false;   // 默认隐藏：由浮层显隐控制（ShowWithFade 驱动显示）
     Recompute();
     ShowWindow(m_hwnd, SW_HIDE);
     m_timer = (UINT)SetTimer(m_hwnd, 1, 1000, nullptr);

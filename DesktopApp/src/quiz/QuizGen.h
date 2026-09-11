@@ -12,7 +12,7 @@
 namespace lj {
 namespace quiz {
 
-// AI 凭据（复用看板娘已填设置，见 QuizScheduler 装配）
+// AI 凭据（设置页「练考」分区写入，见 QuizScheduler 装配）
 struct QuizAIConfig
 {
     std::wstring apiBase;   // 如 L"https://api.deepseek.com/v1"

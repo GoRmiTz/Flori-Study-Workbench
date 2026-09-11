@@ -41,7 +41,7 @@ struct QItem
 class QuizView : public View
 {
 public:
-    QuizView();   // 启动每日定时出题调度器（QuizScheduler，复用看板娘凭据）
+    QuizView();   // 启动每日定时出题调度器（QuizScheduler，凭据见设置页）
     const wchar_t* Id() const override { return L"quiz"; }
     const wchar_t* Title() const override { return L"练考"; }
 
