@@ -59,6 +59,10 @@ private:
     int       m_totalInterruptSec = 0;       // 累计中断秒数
     std::wstring m_lastProc;                 // 最近中断进程名
 
+    // 批次 F：顶部胶囊 HUD（自习室同款）——直接提供退出交互，不用再去托盘
+    RECT      m_rEnd{};                      // 「结束」按钮命中区（客户像素）
+    long long m_confirmUntil = 0;            // 两步确认截止（epoch 秒；0 = 未进入确认态）
+
     std::function<void()> m_onFinish;
 };
 

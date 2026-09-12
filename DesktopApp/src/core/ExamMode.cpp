@@ -7,6 +7,7 @@
 #include "core/ExamMode.h"
 #include "core/FocusTracker.h"
 #include "core/TrayIcon.h"
+#include <windowsx.h>
 #include <ctime>
 
 namespace lj {
@@ -130,19 +131,24 @@ void ExamMode::CreateOverlay(HINSTANCE hInst)
     wc.lpszClassName = L"FloriExamHud";
     RegisterClassExW(&wc);
 
+    // 批次 F：大横条改为「顶部小圆角框」（自习室屏保同款）——显示时间 + 中断，
+    // 右侧直接提供「结束」交互（两步确认），不必再去托盘。
+    // 穿透策略：WM_NCHITTEST 里仅按钮区收点击（HTCLIENT），其余 HTTRANSPARENT
+    // 穿透到下层模考应用——既可点按钮，又不挡正常使用。
     int scale = 96;
     if (HDC hdc = GetDC(nullptr)) { scale = GetDeviceCaps(hdc, LOGPIXELSX); ReleaseDC(nullptr, hdc); }
     float s = scale / 96.0f;
     int W = GetSystemMetrics(SM_CXSCREEN);
-    int H = (int)(72.0f * s + 0.5f);   // 顶部横幅高度（DPI 自适应）
+    int pw = (int)(560.0f * s + 0.5f), ph = (int)(52.0f * s + 0.5f);
 
     m_hwnd = CreateWindowExW(
-        WS_EX_TOPMOST | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE,
+        WS_EX_TOPMOST | WS_EX_NOACTIVATE,
         L"FloriExamHud", L"", WS_POPUP,
-        0, 0, W, H, nullptr, nullptr, hInst, this);
+        (W - pw) / 2, (int)(16.0f * s), pw, ph, nullptr, nullptr, hInst, this);
     if (!m_hwnd) return;
     ShowWindow(m_hwnd, SW_SHOWNOACTIVATE);
     m_timer = (UINT)SetTimer(m_hwnd, 1, 1000, nullptr);
+    m_confirmUntil = 0;
     InvalidateRect(m_hwnd, nullptr, TRUE);
 }
 
@@ -150,6 +156,7 @@ void ExamMode::Destroy()
 {
     if (m_timer && m_hwnd) { KillTimer(m_hwnd, m_timer); m_timer = 0; }
     if (m_hwnd) { DestroyWindow(m_hwnd); m_hwnd = nullptr; }
+    m_confirmUntil = 0;
 }
 
 LRESULT CALLBACK ExamMode::WndProcStatic(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
@@ -171,6 +178,31 @@ LRESULT CALLBACK ExamMode::WndProcStatic(HWND hwnd, UINT msg, WPARAM wp, LPARAM 
 LRESULT ExamMode::WndProc(UINT msg, WPARAM wp, LPARAM lp)
 {
     switch (msg) {
+    case WM_NCHITTEST: {
+        // 仅「结束」按钮可点，其余全部穿透到下层模考应用
+        POINT pt{ GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
+        ScreenToClient(m_hwnd, &pt);
+        if (pt.x >= m_rEnd.left && pt.x <= m_rEnd.right &&
+            pt.y >= m_rEnd.top && pt.y <= m_rEnd.bottom)
+            return HTCLIENT;
+        return HTTRANSPARENT;
+    }
+    case WM_LBUTTONDOWN: {
+        POINT pt{ GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
+        if (pt.x >= m_rEnd.left && pt.x <= m_rEnd.right &&
+            pt.y >= m_rEnd.top && pt.y <= m_rEnd.bottom) {
+            long long now = (long long)time(nullptr);
+            if (m_confirmUntil != 0 && now <= m_confirmUntil) {
+                m_confirmUntil = 0;
+                Finish();                       // 二次点击：确认结束并出报告
+            } else {
+                m_confirmUntil = now + 3;       // 首次点击：进入 3 秒确认态
+                InvalidateRect(m_hwnd, nullptr, TRUE);
+            }
+            return 0;
+        }
+        return 0;
+    }
     case WM_PAINT: {
         PAINTSTRUCT ps{};
         HDC hdc = BeginPaint(m_hwnd, &ps);
@@ -180,7 +212,7 @@ LRESULT ExamMode::WndProc(UINT msg, WPARAM wp, LPARAM lp)
     }
     case WM_TIMER:
         Tick();
-        if (m_hwnd) InvalidateRect(m_hwnd, nullptr, FALSE);
+        if (m_hwnd) InvalidateRect(m_hwnd, nullptr, TRUE);
         return 0;
     case WM_DESTROY:
         return 0;
@@ -188,50 +220,84 @@ LRESULT ExamMode::WndProc(UINT msg, WPARAM wp, LPARAM lp)
     return DefWindowProcW(m_hwnd, msg, wp, lp);
 }
 
+// —— GDI 小工具（胶囊绘制用）——
+namespace {
+HFONT ExMakeFont(int px, bool bold)
+{
+    return CreateFontW(-px, 0, 0, 0, bold ? FW_BOLD : FW_NORMAL, FALSE, FALSE, FALSE,
+                       DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                       CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Microsoft YaHei UI");
+}
+void ExRoundRect(HDC hdc, int l, int t, int r, int b, int rad, COLORREF fill, COLORREF edge, int edgeW)
+{
+    HBRUSH hb = CreateSolidBrush(fill);
+    HPEN pen = CreatePen(PS_SOLID, edgeW, edge);
+    auto ob = (HBRUSH)SelectObject(hdc, hb);
+    auto op = (HPEN)SelectObject(hdc, pen);
+    RoundRect(hdc, l, t, r, b, rad, rad);
+    SelectObject(hdc, ob); SelectObject(hdc, op);
+    DeleteObject(hb); DeleteObject(pen);
+}
+} // namespace
+
 void ExamMode::Paint(HDC hdc)
 {
     RECT rc{}; GetClientRect(m_hwnd, &rc);
     int W = rc.right, H = rc.bottom;
+    const COLORREF paper = RGB(247, 243, 236);
+    const COLORREF ink   = RGB(56, 48, 44);
+    const COLORREF ink3  = RGB(150, 140, 132);
+    const COLORREF seal  = RGB(178, 84, 92);
+    const COLORREF warn  = RGB(196, 96, 72);
 
-    // 背景：酒红档案室深色横幅
-    HBRUSH hBg = CreateSolidBrush(RGB(38, 17, 23));
-    HBRUSH hOld = (HBRUSH)SelectObject(hdc, hBg);
-    PatBlt(hdc, 0, 0, W, H, PATCOPY);
-    // 底部朱砂 accent 线
-    HBRUSH hAcc = CreateSolidBrush(RGB(107, 42, 53));
-    SelectObject(hdc, hAcc);
-    PatBlt(hdc, 0, H - 3, W, 3, PATCOPY);
-    SelectObject(hdc, hOld);
-    DeleteObject(hBg); DeleteObject(hAcc);
+    // 胶囊本体（米白 + 朱砂细边）
+    ExRoundRect(hdc, 0, 0, W, H, H / 2, paper, seal, 1);
 
     SetBkMode(hdc, TRANSPARENT);
 
-    // 大号倒计时（居中）
-    HFONT hBig = CreateFontW(-32, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
-        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-        DEFAULT_PITCH, L"Microsoft YaHei UI");
-    HFONT hSmall = CreateFontW(-15, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-        DEFAULT_PITCH, L"Microsoft YaHei UI");
-    HFONT hOldF = (HFONT)SelectObject(hdc, hBig);
+    // 左：倒计时（等宽加粗）
+    HFONT hBig = ExMakeFont(24, true);
+    SelectObject(hdc, hBig);
+    SetTextColor(hdc, ink);
+    RECT rc1{ 24, 0, 150, H };
+    DrawTextW(hdc, CountdownText().c_str(), -1, &rc1, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
-    SetTextColor(hdc, RGB(242, 230, 216));
-    RECT c{ 0, 4, W, H - 4 };
-    DrawTextW(hdc, CountdownText().c_str(), -1, &c, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    // 中：状态（考试中 / 中断进行中红显）+ 中断次数
+    bool inInterrupt = (m_interruptStart != 0);
+    HFONT hMid = ExMakeFont(13, false);
+    SelectObject(hdc, hMid);
+    SetTextColor(hdc, inInterrupt ? warn : ink3);
+    std::wstring status = inInterrupt
+        ? (L"⚠ 中断：" + (m_lastProc.empty() ? L"其它应用" : m_lastProc))
+        : L"考试中";
+    RECT rc2{ 170, 0, W / 2 + 40, H };
+    DrawTextW(hdc, status.c_str(), -1, &rc2, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    SetTextColor(hdc, ink3);
+    wchar_t ib[32];
+    swprintf_s(ib, L"中断 %d 次", m_report.interrupts);
+    RECT rc3{ W / 2 + 50, 0, W - 150, H };
+    DrawTextW(hdc, ib, -1, &rc3, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
-    SelectObject(hdc, hSmall);
-    // 左：状态（中断时高亮朱砂）
-    SetTextColor(hdc, m_interruptStart != 0 ? RGB(224, 120, 96) : RGB(196, 184, 176));
-    RECT l{ 16, 4, W / 2 - 60, H - 4 };
-    DrawTextW(hdc, StatusText().c_str(), -1, &l, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-    // 右：中断次数 + 退出提示
-    SetTextColor(hdc, RGB(196, 184, 176));
-    std::wstring right = L"中断 " + std::to_wstring(m_report.interrupts) + L" 次 · 右键托盘退出";
-    RECT r{ W / 2 + 60, 4, W - 16, H - 4 };
-    DrawTextW(hdc, right.c_str(), -1, &r, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+    // 右：结束按钮（两步确认）
+    m_rEnd = { W - 128, 8, W - 14, H - 8 };
+    long long now = (long long)time(nullptr);
+    bool confirming = (m_confirmUntil != 0 && now <= m_confirmUntil);
+    if (confirming) {
+        ExRoundRect(hdc, m_rEnd.left, m_rEnd.top, m_rEnd.right, m_rEnd.bottom,
+                    (m_rEnd.bottom - m_rEnd.top) / 2, warn, warn, 0);
+        SetTextColor(hdc, RGB(255, 246, 238));
+    } else {
+        ExRoundRect(hdc, m_rEnd.left, m_rEnd.top, m_rEnd.right, m_rEnd.bottom,
+                    (m_rEnd.bottom - m_rEnd.top) / 2, seal, seal, 0);
+        SetTextColor(hdc, RGB(255, 246, 238));
+    }
+    HFONT hBtn = ExMakeFont(13, true);
+    SelectObject(hdc, hBtn);
+    RECT rb{ m_rEnd.left, m_rEnd.top, m_rEnd.right, m_rEnd.bottom };
+    DrawTextW(hdc, confirming ? L"确认结束?" : L"✕ 结束", -1, &rb,
+              DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 
-    SelectObject(hdc, hOldF);
-    DeleteObject(hBig); DeleteObject(hSmall);
+    DeleteObject(hBig); DeleteObject(hMid); DeleteObject(hBtn);
 }
 
 } // namespace lj
