@@ -4,6 +4,7 @@
 #include "core/TrayIcon.h"  // #71 专注结束系统气泡提醒
 #include "core/FloatLayer.h" // F-D2 浮层读取自习室在线人数
 #include "audio/MusicPlayer.h"
+#include "core/FocusSaver.h"   // 批次 C 修正：专注屏保（独立全屏覆盖窗口）
 #include "ui/Glyphs.h"      // #49 矢量播放/暂停图标（替代 ⏸ 表情蓝方块）
 #include "ui/Layout.h"
 #include <windows.h>
@@ -18,44 +19,10 @@
 namespace lj {
 
 // ============================================================
-//  批次 C：主窗口设备全屏（盖住任务栏，非软件内全屏）
-//  专注全屏覆盖开启时切无边框置顶全屏，专注结束恢复原样。
+//  批次 C 修正：专注全屏改为「独立屏保窗口」（core/FocusSaver），
+//  不再对主窗口做任何全屏变形——桌面照常，覆盖层独立浮于其上。
+//  启停见 ToggleStart / ResetTimer / CancelFocus / CompleteFocus / OnLeave。
 // ============================================================
-static bool g_devFs = false;
-static LONG  g_devFsOldStyle = 0;
-static WINDOWPLACEMENT g_devFsOldPlc{};
-
-static void EnterDeviceFullscreen()
-{
-    HWND hw = AppHwnd();
-    if (!hw || g_devFs) return;
-    HMONITOR mon = MonitorFromWindow(hw, MONITOR_DEFAULTTONEAREST);
-    MONITORINFO mi{ sizeof(mi) };
-    if (!GetMonitorInfoW(mon, &mi)) return;
-    g_devFsOldStyle = (LONG)GetWindowLongW(hw, GWL_STYLE);
-    g_devFsOldPlc.length = sizeof(g_devFsOldPlc);
-    GetWindowPlacement(hw, &g_devFsOldPlc);
-    SetWindowLongW(hw, GWL_STYLE,
-                   g_devFsOldStyle & ~(WS_CAPTION | WS_THICKFRAME | WS_SYSMENU |
-                                       WS_MINIMIZEBOX | WS_MAXIMIZEBOX));
-    SetWindowPos(hw, HWND_TOPMOST,
-                 mi.rcMonitor.left, mi.rcMonitor.top,
-                 mi.rcMonitor.right - mi.rcMonitor.left,
-                 mi.rcMonitor.bottom - mi.rcMonitor.top,
-                 SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
-    g_devFs = true;
-}
-
-static void ExitDeviceFullscreen()
-{
-    HWND hw = AppHwnd();
-    if (!hw || !g_devFs) return;
-    SetWindowLongW(hw, GWL_STYLE, g_devFsOldStyle);
-    SetWindowPlacement(hw, &g_devFsOldPlc);
-    SetWindowPos(hw, HWND_NOTOPMOST, 0, 0, 0, 0,
-                 SWP_NOMOVE | SWP_NOSIZE | SWP_FRAMECHANGED);
-    g_devFs = false;
-}
 
 // 本地自习室定义（无服务端，纯本地「房间」概念）
 const RoomView::RoomDef RoomView::kRooms[3] = {
@@ -137,6 +104,12 @@ void RoomView::OnEnter()
     m_todayItems = ItemsForDate(CheckinStore::Instance().LoadItems(), Today());
     RecomputeStats();
     ReloadFocusPrefs();   // 批次 C：focusItem / focusFullscreen（打卡页设置后进入即生效）
+    // 专注屏保回调（RoomView 与 App 同生命周期，捕获安全）
+    {
+        auto& fs = FocusSaver::Instance();
+        fs.onPauseToggle = [this] { ToggleStart(); };
+        fs.onEnd         = [this] { ResetTimer(); };
+    }
 
     // #71 专注白名单：与 FocusTracker 现行名单对齐（切换账户后名单随账户走）。
     // 播种默认清单只在 FocusTracker::Start() 里做一次；这里对未启用检测的
@@ -171,7 +144,7 @@ void RoomView::OnEnter()
 
 void RoomView::OnLeave()
 {
-    ExitDeviceFullscreen();   // 批次 C：保险——离开自习室时若仍在设备全屏则恢复
+    FocusSaver::Instance().Stop();   // 批次 C：保险——离开自习室时关闭屏保
     // 注销本视图注册的下行处理器，避免离开后仍回调已失效的视图；
     // 并显式离房（服务器会广播在场变化）。
     auto rt = &Realtime::Instance();
@@ -275,7 +248,9 @@ void RoomView::DebugForceOpen()
     m_remain = 15.0f * 60.0f;
     m_focusStart = (long long)std::time(nullptr);
     m_overlayA.Snap(1.0f);
-    m_focusFs = true;   // 批次 C：截图走全屏覆盖模式（渐显面板 / 顶部小圆角框）
+    ReloadFocusPrefs();   // 读真实 focusFs 设置（可用 --edit 验证屏保/覆盖层两态）
+    // 批次 C 修正：同时启动专注屏保（独立窗口，需用 PrintWindow 抓图验证）
+    if (m_focusFs) FocusSaver::Instance().Start(L"新打卡项", 15 * 60);
     // 造两首示例曲目（不真正播放）让控制条显示出来
     if (MusicPlayer::Instance().Count() == 0) {
         std::vector<MusicPlayer::Track> demo = {
@@ -761,7 +736,8 @@ void RoomView::ToggleStart()
         m_focusStart = (long long)std::time(nullptr);
         m_timer = TimerState::Running;
         AutoStartMusic();   // 批次 B：开始专注自动播放背景音乐
-        if (m_focusFs) EnterDeviceFullscreen();   // 批次 C：电脑全屏（盖任务栏）
+        if (m_focusFs)
+            FocusSaver::Instance().Start(CurrentArrangement(), (int)m_remain);   // 独立屏保
     } else if (m_timer == TimerState::Running) {
         m_timer = TimerState::Paused;
     } else {
@@ -781,14 +757,14 @@ void RoomView::ResetTimer()
 {
     m_timer = TimerState::Idle;
     m_remain = (float)m_presetMin * 60.0f;
-    ExitDeviceFullscreen();   // 批次 C：退出设备全屏
+    FocusSaver::Instance().Stop();   // 批次 C：关闭屏保
 }
 
 void RoomView::CancelFocus()
 {
     m_timer = TimerState::Idle;
     m_remain = (float)m_presetMin * 60.0f;
-    ExitDeviceFullscreen();   // 批次 C：退出设备全屏
+    FocusSaver::Instance().Stop();   // 批次 C：关闭屏保
 }
 
 void RoomView::CompleteFocus()
@@ -804,7 +780,7 @@ void RoomView::CompleteFocus()
     m_remain = (float)m_presetMin * 60.0f;
     RecomputeStats();
     SendMyPresence();
-    ExitDeviceFullscreen();   // 批次 C：专注完成退出设备全屏
+    FocusSaver::Instance().Stop();   // 批次 C：专注完成关闭屏保
 
     // ---- #71 专注结束提醒 ----
     // 用户可能正盯着别的窗口（看网课视频），所以三路都要给：
@@ -1079,24 +1055,12 @@ void RoomView::Update(float dt, const Input& in)
     }
 
     bool active = (m_timer == TimerState::Running || m_timer == TimerState::Paused);
-    m_overlayA.target = active ? 1.0f : 0.0f;
+    // 批次 C 修正：全屏覆盖交给独立屏保窗口（FocusSaver），
+    // 主窗口内的覆盖层只在「未开屏保」时启用
+    bool saverOn = m_focusFs && FocusSaver::Instance().Running();
+    if (active && saverOn) FocusSaver::Instance().PushState((int)m_remain, m_timer == TimerState::Paused);
+    m_overlayA.target = (active && !saverOn) ? 1.0f : 0.0f;
     m_overlayA.Update(dt);
-
-    // ---- 批次 C：全屏覆盖模式的鼠标静止检测 ----
-    // 移动 ≥0.5px 视为「动」，静止 2s 后渐显专注面板，移动时仅顶部小圆角框
-    if (active && m_focusFs) {
-        if (m_lastMx < 0.0f || m_lastMy < 0.0f ||
-            fabsf(in.mouseX - m_lastMx) > 0.5f || fabsf(in.mouseY - m_lastMy) > 0.5f) {
-            m_mouseIdle = 0.0f;
-            m_lastMx = in.mouseX; m_lastMy = in.mouseY;
-        } else {
-            m_mouseIdle += dt;
-        }
-    } else {
-        m_mouseIdle = 99.0f;   // 非全屏/非专注：面板常显
-    }
-    // 全屏模式下：面板可见（静止近 2s）才允许覆盖层控件响应
-    const bool overlayUiOn = !m_focusFs || m_mouseIdle >= 1.7f;
 
     if (m_timer == TimerState::Idle)        m_startBtn.label = L"开 始 专 注";
     else if (m_timer == TimerState::Running) m_startBtn.label = L"暂 停";
@@ -1120,10 +1084,7 @@ void RoomView::Update(float dt, const Input& in)
     }
 
     if (active) {
-        // 全屏覆盖且面板未显（鼠标刚动）→ 吃掉点击，不让误触暂停/取消
-        Input ovIn = in;
-        if (!overlayUiOn) { ovIn.clicked = ovIn.released = ovIn.pressed = false; }
-        UpdateWidgets(m_overlayWidgets, dt, ovIn);   // 屏幕坐标
+        UpdateWidgets(m_overlayWidgets, dt, in);   // 屏幕坐标
         m_overInteractive = false;
         for (auto* w : m_overlayWidgets) if (w->Hovered()) m_overInteractive = true;
     } else {
@@ -1194,8 +1155,7 @@ void RoomView::Update(float dt, const Input& in)
     }
 
     // ---- 批次 B：专注覆盖层音乐控制（音量 / 暂停 / 切歌）----
-    // 批次 C：全屏覆盖时面板未渐显（鼠标刚动）不响应，防误触
-    if (active && m_overlayA.value > 0.5f && overlayUiOn) {
+    if (active && m_overlayA.value > 0.5f) {
         // 音量条（屏幕坐标，覆盖层不随滚动）
         const auto& vr = m_ovVol;
         bool onVol = (vr.right > vr.left && in.mouseX >= vr.left && in.mouseX <= vr.right &&
@@ -1231,18 +1191,6 @@ void RoomView::Update(float dt, const Input& in)
                        in.mouseY >= (std::min)(m_ovPrev.top, m_ovVol.top) &&
                        in.mouseY <= (std::max)(m_ovPrev.bottom, m_ovVol.bottom);
         if (overCtl) m_overInteractive = true;
-    }
-
-    // ---- 批次 C：全屏顶部小圆角框的功能键（移动态显示时才响应）----
-    if (m_focusFs && active && m_mouseIdle < 1.6f && in.clicked) {
-        auto hit = [](const D2D1_RECT_F& r, float x, float y) {
-            return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
-        };
-        if (hit(m_ovPillPause, in.mouseX, in.mouseY)) {
-            ToggleStart();   // 运行↔暂停（不退全屏）
-        } else if (hit(m_ovPillExit, in.mouseX, in.mouseY)) {
-            ResetTimer();    // 结束本次专注（ResetTimer 内退出设备全屏）
-        }
     }
 
     // ---- §3 聊天输入（房间内且非静音房）----
@@ -1849,60 +1797,6 @@ void RoomView::PaintFocusOverlay(Canvas& cv)
     float cx = (m_area.left + m_area.right) * 0.5f;
     float cy = m_area.top + (m_area.bottom - m_area.top) * 0.38f;
 
-    // ---- 批次 C：全屏覆盖模式 —— 鼠标静止 2s 渐显面板，移动时只留顶部小圆角框
-    float pa = m_focusFs ? Clamp01((m_mouseIdle - 1.6f) / 0.6f) : 1.0f;
-
-    if (m_focusFs && pa < 0.98f) {
-        // 顶部小圆角框：剩余时间 + 当前打卡项 + 暂停/继续 + 结束专注
-        int ttotal = (int)std::ceil(m_remain);
-        wchar_t tb[16];
-        swprintf_s(tb, L"%02d:%02d", ttotal / 60, ttotal % 60);
-        float pw = 480.0f, ph = 44.0f;
-        m_ovPill = { cx - pw * 0.5f, m_area.top + 16.0f, cx + pw * 0.5f, m_area.top + 16.0f + ph };
-        cv.PushOpacity(a * (1.0f - pa));
-        cv.FillRoundRect(m_ovPill, ph * 0.5f, pal.paperHi);
-        cv.StrokeRoundRect(m_ovPill, ph * 0.5f, pal.rule, shape::kHair);
-        TextStyle pt; pt.role = FontRole::Sans; pt.size = 13.5f;
-        pt.hAlign = HAlign::Center; pt.vAlign = VAlign::Middle;
-        cv.Text(std::wstring(tb) + L"  ·  " + CurrentArrangement(),
-                { m_ovPill.left + 16.0f, m_ovPill.top, m_ovPill.right - 96.0f, m_ovPill.bottom },
-                pt, pal.ink900);
-
-        // 功能键：暂停/继续（左）+ 结束专注（右，朱砂）
-        bool paused = (m_timer == TimerState::Paused);
-        float by0 = m_ovPill.top + 8.0f, by1 = m_ovPill.bottom - 8.0f;
-        m_ovPillPause = { m_ovPill.right - 88.0f, by0, m_ovPill.right - 50.0f, by1 };
-        m_ovPillExit  = { m_ovPill.right - 44.0f, by0, m_ovPill.right - 8.0f, by1 };
-        // 暂停/继续：描边圆，双竖线或三角
-        {
-            float pcx = (m_ovPillPause.left + m_ovPillPause.right) * 0.5f;
-            float pcy = (m_ovPillPause.top + m_ovPillPause.bottom) * 0.5f;
-            cv.StrokeCircle(pcx, pcy, 14.0f, pal.rule, shape::kHair);
-            if (paused) {
-                cv.Line(pcx - 4.0f, pcy - 6.0f, pcx + 6.0f, pcy, pal.ink700, 2.0f);
-                cv.Line(pcx + 6.0f, pcy, pcx - 4.0f, pcy + 6.0f, pal.ink700, 2.0f);
-                cv.Line(pcx - 4.0f, pcy + 6.0f, pcx - 4.0f, pcy - 6.0f, pal.ink700, 2.0f);
-            } else {
-                cv.Line(pcx - 3.0f, pcy - 5.0f, pcx - 3.0f, pcy + 5.0f, pal.ink700, 2.4f);
-                cv.Line(pcx + 3.0f, pcy - 5.0f, pcx + 3.0f, pcy + 5.0f, pal.ink700, 2.4f);
-            }
-        }
-        // 结束：朱砂圆 + ✕
-        {
-            float ecx = (m_ovPillExit.left + m_ovPillExit.right) * 0.5f;
-            float ecy = (m_ovPillExit.top + m_ovPillExit.bottom) * 0.5f;
-            cv.FillCircle(ecx, ecy, 14.0f, pal.seal);
-            cv.Line(ecx - 4.5f, ecy - 4.5f, ecx + 4.5f, ecy + 4.5f, pal.paperHi, 2.2f);
-            cv.Line(ecx + 4.5f, ecy - 4.5f, ecx - 4.5f, ecy + 4.5f, pal.paperHi, 2.2f);
-        }
-        cv.PopOpacity();
-    } else {
-        m_ovPill = {};
-    }
-
-    if (pa > 0.004f) {
-    cv.PushOpacity(pa);
-
     TextStyle st; st.role = FontRole::Mono; st.size = 12.0f; st.letterSpacing = 3.0f; st.hAlign = HAlign::Center;
     cv.Text(m_timer == TimerState::Paused ? L"已 暂 停 · 专 注 中" : L"专 注 中 · 界 面 已 静 默",
             { m_area.left, cy - 150.0f, m_area.right, cy - 126.0f }, st, pal.seal);
@@ -2003,9 +1897,6 @@ void RoomView::PaintFocusOverlay(Canvas& cv)
         } else {
             m_ovPrev = m_ovPlay = m_ovNext = m_ovVol = { 0, 0, 0, 0 };
         }
-    }
-
-    cv.PopOpacity();   // pa（全屏模式面板渐显）
     }
 
     cv.PopOpacity();

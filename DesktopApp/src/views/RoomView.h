@@ -49,9 +49,6 @@ public:
     void Layout(const D2D1_RECT_F& area, Canvas& cv) override;
     void Update(float dt, const Input& in) override;
     void Paint(Canvas& cv) override;
-    // 批次 C：设置开启全屏覆盖时，专注中视图吃满窗口（顶栏滑出）
-    bool FullBleed() const override
-    { return m_timer != TimerState::Idle && m_focusFs; }
     // 截图自检：--shot --route room --preview 直接铺开白名单弹层
     void DebugForcePreview() override;
     void DebugForceOpen() override;    // 截图自检：强制专注中（覆盖层 + 音乐控制条）
@@ -192,12 +189,7 @@ private:
     // ---- 批次 C：专注体系 ----
     std::wstring m_focusItem;       // 自定义当前专注项（空 = 按当前时段自动）
     D2D1_RECT_F m_arrCancelR{};     // 计时卡「取消固定」小按钮
-    bool  m_focusFs = false;        // 全屏覆盖开关（settings.focusFullscreen）
-    float m_mouseIdle = 99.0f;      // 鼠标静止秒数（全屏模式渐显用）
-    float m_lastMx = -1.0f, m_lastMy = -1.0f;
-    D2D1_RECT_F m_ovPill{};         // 全屏模式顶部小圆角框
-    D2D1_RECT_F m_ovPillPause{};    // 小框内：暂停/继续
-    D2D1_RECT_F m_ovPillExit{};     // 小框内：结束专注
+    bool  m_focusFs = false;        // 专注时启动独立屏保（settings.focusFullscreen）
     void CancelFocusItem();         // 取消自定义专注项 → 恢复时段建议
     void ReloadFocusPrefs();        // 从 settings 读 focusItem / focusFullscreen
     void PlayMusic();               // 播放 meta 匹配的曲目（无匹配取第一首）；暂停→继续
