@@ -192,6 +192,12 @@ private:
     bool  m_focusFs = false;        // 专注时启动独立屏保（settings.focusFullscreen）
     void CancelFocusItem();         // 取消自定义专注项 → 恢复时段建议
     void ReloadFocusPrefs();        // 从 settings 读 focusItem / focusFullscreen
+
+    // ---- 批次 C：成员悬停资料卡 ----
+    std::vector<D2D1_RECT_F> m_memRows;   // 成员行命中区（内容坐标，与 m_members 平行）
+    int   m_memHover = -1;                // 当前悬停成员索引
+    float m_memHoverT = 0.0f;             // 悬停持续秒数
+    void PaintMemTooltip(Canvas& cv);     // 悬停 2s 显示成员资料卡
     void PlayMusic();               // 播放 meta 匹配的曲目（无匹配取第一首）；暂停→继续
     void MusicVolumeFromX(float x); // 按滑条内 x 坐标换算音量并应用
 

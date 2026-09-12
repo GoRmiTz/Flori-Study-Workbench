@@ -104,12 +104,6 @@ void RoomView::OnEnter()
     m_todayItems = ItemsForDate(CheckinStore::Instance().LoadItems(), Today());
     RecomputeStats();
     ReloadFocusPrefs();   // 批次 C：focusItem / focusFullscreen（打卡页设置后进入即生效）
-    // 专注屏保回调（RoomView 与 App 同生命周期，捕获安全）
-    {
-        auto& fs = FocusSaver::Instance();
-        fs.onPauseToggle = [this] { ToggleStart(); };
-        fs.onEnd         = [this] { ResetTimer(); };
-    }
 
     // #71 专注白名单：与 FocusTracker 现行名单对齐（切换账户后名单随账户走）。
     // 播种默认清单只在 FocusTracker::Start() 里做一次；这里对未启用检测的
@@ -1030,6 +1024,34 @@ void RoomView::Update(float dt, const Input& in)
     m_wlA.target = m_wlOpen ? 1.0f : 0.0f;
     m_wlA.Update(dt);
 
+    // ---- 批次 C：屏保按钮动作（屏保线程置原子计数，这里在主线程执行）----
+    {
+        bool pauseAct = false, endAct = false;
+        if (FocusSaver::Instance().ConsumeActions(pauseAct, endAct)) {
+            if (pauseAct) ToggleStart();
+            if (endAct)   ResetTimer();
+        }
+    }
+
+    // ---- 批次 C：成员行悬停 2s → 显示成员资料卡 ----
+    if (!m_wlOpen) {
+        int hitIdx = -1;
+        float mx = in.mouseX;
+        float my = in.mouseY + ScrollY();
+        for (int i = 0; i < (int)m_memRows.size(); ++i) {
+            const auto& r = m_memRows[i];
+            if (mx >= r.left && mx <= r.right && my >= r.top && my <= r.bottom) { hitIdx = i; break; }
+        }
+        if (hitIdx >= 0 && hitIdx == m_memHover) {
+            m_memHoverT += dt;
+        } else {
+            m_memHover = hitIdx;
+            m_memHoverT = 0.0f;
+        }
+    } else {
+        m_memHover = -1; m_memHoverT = 0.0f;
+    }
+
     if (m_timer == TimerState::Running) {
         // P1-5 #71 番茄钟 × 前台学习联动：检测到离开学习（前台非学习窗口或空闲）
         // 时自动暂停倒计时，回到学习窗口后继续；联动关闭则无视前台状态。
@@ -1298,6 +1320,7 @@ void RoomView::PaintRoom(Canvas& cv)
     PaintTimerCard(cv);
     m_leaveBtn.Paint(cv);
     PaintMembersCard(cv);
+    PaintMemTooltip(cv);   // 批次 C：成员悬停资料卡
     PaintHistory(cv);
     PaintChat(cv);
     m_backBtn.Paint(cv);
@@ -1475,8 +1498,10 @@ void RoomView::PaintMembersCard(Canvas& cv)
     my += 28.0f;
 
     // 其他在线成员（来自服务端 presence 广播）
+    m_memRows.clear();   // 批次 C：成员行命中区（悬停资料卡用）
     for (const auto& mem : m_members) {
         if (my + 24.0f > m_membersCard.bottom - 8.0f) break;
+        m_memRows.push_back({ ix - 6.0f, my, right, my + 26.0f });
         cv.FillCircle(ix + 12.0f, my + 12.0f, 5.0f, WithAlpha(pal.ink300, 0.5f));
         TextStyle mns; mns.role = FontRole::Sans; mns.size = 12.5f; mns.vAlign = VAlign::Middle;
         cv.Text(mem.name, { ix + 28.0f, my, right - 60.0f, my + 24.0f }, mns, pal.ink700);
@@ -1495,6 +1520,66 @@ void RoomView::PaintMembersCard(Canvas& cv)
 
     cv.PopOpacity();
     cv.PopTransform();
+}
+
+// 批次 C：成员行悬停 2s → 成员资料卡（内容坐标，随滚动；渐入 0.3s）
+void RoomView::PaintMemTooltip(Canvas& cv)
+{
+    if (m_memHover < 0 || m_memHoverT < 2.0f) return;
+    if (m_memHover >= (int)m_members.size() || m_memHover >= (int)m_memRows.size()) return;
+    const auto& mem = m_members[m_memHover];
+    const auto& pal = cv.Pal();
+    const D2D1_RECT_F& row = m_memRows[m_memHover];
+
+    const float w = 252.0f, h = 148.0f;
+    float x = row.left - w - 10.0f;
+    if (x < m_area.left + 8.0f) x = row.right + 10.0f;
+    float y = row.top - h * 0.4f;
+    y = (std::max)(m_membersCard.top + 8.0f, (std::min)(y, m_membersCard.bottom - h - 8.0f));
+    D2D1_RECT_F card{ x, y, x + w, y + h };
+
+    float a = Clamp01((m_memHoverT - 2.0f) / 0.3f);
+    cv.PushOpacity(a);
+    cv.FillRoundRect(card, shape::kEdge, pal.paperHi);
+    cv.StrokeRoundRect(card, shape::kEdge, pal.rule, shape::kHair);
+
+    float tx = card.left + 18.0f;
+    float rx = card.right - 18.0f;
+    TextStyle ns; ns.role = FontRole::Sans; ns.size = 14.0f;
+    ns.weight = DWRITE_FONT_WEIGHT_SEMI_BOLD; ns.vAlign = VAlign::Middle;
+    cv.Text(mem.name, { tx, card.top + 14.0f, rx, card.top + 36.0f }, ns, pal.ink900);
+
+    std::wstring st = mem.status == L"focusing" ? L"专注中" :
+                      (mem.status == L"paused" ? L"暂停" : L"在线");
+    TextStyle ss; ss.role = FontRole::Mono; ss.size = 10.5f; ss.vAlign = VAlign::Middle;
+    ss.hAlign = HAlign::Right;
+    cv.Text(st, { rx - 80.0f, card.top + 16.0f, rx, card.top + 34.0f }, ss,
+            mem.status == L"focusing" ? pal.seal : pal.jade);
+
+    cv.PerforationH(tx, rx, card.top + 44.0f, WithAlpha(pal.ruleStrong, 0.5f));
+
+    float yy = card.top + 56.0f;
+    TextStyle ls; ls.role = FontRole::Sans; ls.size = 12.0f; ls.vAlign = VAlign::Middle;
+    if (!mem.focusContent.empty()) {
+        cv.Text(L"正在专注 " + mem.focusContent, { tx, yy, rx, yy + 20.0f }, ls, pal.ink900);
+        yy += 24.0f;
+    }
+    if (mem.focusSeconds > 0) {
+        wchar_t fb[48];
+        swprintf_s(fb, L"今日已专注 %d 分钟", mem.focusSeconds);
+        cv.Text(fb, { tx, yy, rx, yy + 20.0f }, ls, pal.ink700);
+        yy += 24.0f;
+    }
+    if (mem.since > 0) {
+        int onlineMin = (int)((long long)std::time(nullptr) - mem.since) / 60;
+        wchar_t ob[48];
+        swprintf_s(ob, L"已在线 %d 分钟", (std::max)(0, onlineMin));
+        cv.Text(ob, { tx, yy, rx, yy + 20.0f }, ls, pal.ink500);
+    } else if (mem.focusContent.empty() && mem.focusSeconds <= 0) {
+        cv.Text(L"暂时没有更多动态。", { tx, yy, rx, yy + 20.0f }, ls, pal.ink300);
+    }
+
+    cv.PopOpacity();
 }
 
 void RoomView::PaintArrangement(Canvas& cv)
