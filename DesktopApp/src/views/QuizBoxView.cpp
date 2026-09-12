@@ -4,6 +4,7 @@
 // ============================================================
 #include "views/QuizBoxView.h"
 #include "ui/Layout.h"
+#include <commdlg.h>
 #include <algorithm>
 #include <cstdlib>
 #include <ctime>
@@ -14,6 +15,173 @@ static bool InRect(const D2D1_RECT_F& r, float x, float y)
 {
     return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
 }
+
+// ============================================================
+//  G4 T6：导入解析（符号约定见 docs/题集卡片盒·开发文档.md）
+//  md：# 盒名 / ## 题面 / - A: 答案 / - #: 标签 / - D: 难度
+//  csv：题面,答案,标签,难度 每行一卡（首行为表头则跳过）
+// ============================================================
+namespace {
+
+std::wstring TrimW(const std::wstring& s)
+{
+    size_t a = 0, b = s.size();
+    while (a < b && (s[a] == L' ' || s[a] == L'\t' || s[a] == L'\r')) ++a;
+    while (b > a && (s[b - 1] == L' ' || s[b - 1] == L'\t' || s[b - 1] == L'\r')) --b;
+    return s.substr(a, b - a);
+}
+
+bool StartsWithW(const std::wstring& s, const std::wstring& p)
+{
+    return s.size() >= p.size() && s.compare(0, p.size(), p) == 0;
+}
+
+// md → 盒列表（# 分盒；## 分卡；- A:/- #:/- D: 属性）
+std::vector<QuizBoxImpBox> ParseImportMd(const std::wstring& src)
+{
+    std::vector<QuizBoxImpBox> out;
+    std::vector<std::wstring> lines;
+    {
+        std::wstring cur;
+        for (wchar_t c : src) {
+            if (c == L'\n') { lines.push_back(cur); cur.clear(); }
+            else if (c != L'\r') cur += c;
+        }
+        lines.push_back(cur);
+    }
+    QuizBoxImpBox curBox;
+    QCard curCard;
+    bool inCard = false;
+    auto flushCard = [&]() {
+        if (inCard && !curCard.front.empty()) curBox.cards.push_back(curCard);
+        curCard = QCard(); inCard = false;
+    };
+    auto flushBox = [&]() {
+        flushCard();
+        if (!curBox.cards.empty()) out.push_back(curBox);
+        curBox = QuizBoxImpBox();
+    };
+    for (auto& l0 : lines) {
+        std::wstring l = TrimW(l0);
+        if (l.empty()) continue;
+        if (l.size() >= 2 && l[0] == L'#' && l[1] != L'#') {          // 一级标题 = 新盒
+            flushBox();
+            curBox.name = TrimW(l.substr(1));
+            if (StartsWithW(curBox.name, L" ")) curBox.name.erase(0, 1);
+            continue;
+        }
+        if (StartsWithW(l, L"## ")) {                                  // 二级标题 = 新卡
+            flushCard();
+            curCard.front = TrimW(l.substr(3));
+            curCard.difficulty = 3;
+            inCard = true;
+            continue;
+        }
+        if (!inCard) continue;
+        if (StartsWithW(l, L"- A:") || StartsWithW(l, L"-A:")) {      // 答案
+            size_t p = l.find(L':');
+            curCard.back = TrimW(l.substr(p + 1));
+            continue;
+        }
+        if (StartsWithW(l, L"- #:") || StartsWithW(l, L"-#:")) {      // 标签
+            size_t p = l.find(L':');
+            curCard.tag = TrimW(l.substr(p + 1));
+            continue;
+        }
+        if (StartsWithW(l, L"- D:") || StartsWithW(l, L"-D:")) {      // 难度
+            size_t p = l.find(L':');
+            int d = _wtoi(l.c_str() + p + 1);
+            if (d >= 1 && d <= 5) curCard.difficulty = d;
+            continue;
+        }
+        // 普通行：无 ## 前导时并作题面续行（首卡前忽略）
+        if (curCard.front.empty()) curCard.front = l;
+        else curCard.front += L" " + l;
+    }
+    flushBox();
+    return out;
+}
+
+// csv → 单盒（题面,答案,标签,难度）
+std::vector<QuizBoxImpBox> ParseImportCsv(const std::wstring& src)
+{
+    std::vector<QuizBoxImpBox> out;
+    std::vector<std::wstring> lines;
+    {
+        std::wstring cur;
+        for (wchar_t c : src) {
+            if (c == L'\n') { lines.push_back(cur); cur.clear(); }
+            else if (c != L'\r') cur += c;
+        }
+        lines.push_back(cur);
+    }
+    QuizBoxImpBox box;
+    box.name = L"导入题盒";
+    bool first = true;
+    for (auto& l0 : lines) {
+        std::wstring l = TrimW(l0);
+        if (l.empty()) continue;
+        // 简单逗号切分（不处理引号内逗号——约定单元格不含逗号）
+        std::vector<std::wstring> cols;
+        std::wstring cur;
+        for (wchar_t c : l) {
+            if (c == L',') { cols.push_back(TrimW(cur)); cur.clear(); }
+            else cur += c;
+        }
+        cols.push_back(TrimW(cur));
+        if (first) {                                                  // 表头检测
+            first = false;
+            bool header = !cols.empty() && (cols[0] == L"题面" || cols[0] == L"front");
+            if (header) continue;
+        }
+        if (cols.empty() || cols[0].empty()) continue;
+        QCard c;
+        c.front = cols[0];
+        c.back  = cols.size() > 1 ? cols[1] : L"";
+        c.tag   = cols.size() > 2 ? cols[2] : L"";
+        c.difficulty = 3;
+        if (cols.size() > 3) {
+            int d = _wtoi(cols[3].c_str());
+            if (d >= 1 && d <= 5) c.difficulty = d;
+        }
+        box.cards.push_back(c);
+    }
+    if (!box.cards.empty()) out.push_back(box);
+    return out;
+}
+
+std::wstring ReadImportFile(const std::wstring& path)
+{
+    FILE* f = _wfopen(path.c_str(), L"rb");
+    if (!f) return L"";
+    fseek(f, 0, SEEK_END); long sz = ftell(f); fseek(f, 0, SEEK_SET);
+    if (sz <= 0) { fclose(f); return L""; }
+    std::string buf; buf.resize((size_t)sz);
+    size_t rd = fread(&buf[0], 1, (size_t)sz, f);
+    fclose(f);
+    if (rd != (size_t)sz) return L"";
+    // BOM
+    size_t off = 0;
+    if (buf.size() >= 3 && (unsigned char)buf[0] == 0xEF && (unsigned char)buf[1] == 0xBB
+        && (unsigned char)buf[2] == 0xBF) off = 3;
+    std::string s = buf.substr(off);
+    bool ascii = true;
+    for (unsigned char c : s) if (c & 0x80) { ascii = false; break; }
+    std::wstring w;
+    if (ascii) {
+        w.resize(s.size());
+        for (size_t i = 0; i < s.size(); ++i) w[i] = (wchar_t)(unsigned char)s[i];
+        return w;
+    }
+    // 尝试 UTF-8 → UTF-16（逐字节简化：交给 MultiByteToWideChar）
+    int n = MultiByteToWideChar(CP_UTF8, 0, s.data(), (int)s.size(), nullptr, 0);
+    if (n <= 0) return L"";
+    w.resize((size_t)n);
+    MultiByteToWideChar(CP_UTF8, 0, s.data(), (int)s.size(), &w[0], n);
+    return w;
+}
+
+} // namespace
 
 // 视图渐入：150ms，12px 上滑
 static float ViewAlpha(float t) { return Clamp01(t / 0.15f); }
@@ -214,6 +382,12 @@ void QuizBoxView::DrawBoxes(Canvas& cv, float s)
     m_nebBtn = { x0 + contentW - 170.0f, y0, x0 + contentW, y0 + 38.0f };
     cv.FillRoundRect(m_nebBtn, 6.0f, pal.jade);
     cv.Text(L"🌌 卡片星云", m_nebBtn, bt, pal.paperHi);
+
+    // G4：导入题库入口（md/csv）
+    m_impBtn = { x0 + contentW - 330.0f, y0, x0 + contentW - 182.0f, y0 + 38.0f };
+    cv.FillRoundRect(m_impBtn, 6.0f, pal.paperLo);
+    cv.StrokeRoundRect(m_impBtn, 6.0f, pal.rule, shape::kHair);
+    cv.Text(L"📥 导入题库", m_impBtn, bt, pal.ink700);
 
     TextStyle h1; h1.role = FontRole::Serif; h1.size = 28.0f;
     h1.weight = DWRITE_FONT_WEIGHT_BLACK; h1.letterSpacing = 2.0f; h1.vAlign = VAlign::Middle;
@@ -1309,6 +1483,17 @@ void QuizBoxView::Update(float dt, const Input& in)
     float s = ScrollY();
     float mx = in.mouseX, my = in.mouseY + s;
 
+    // G4：导入预览弹窗独占
+    if (m_impOpen) {
+        if (in.clicked) {
+            if (InRect(m_impCancelR, mx, my)) { m_impOpen = false; return; }
+            if (InRect(m_impOkR, mx, my)) { DoImport(); return; }
+            if (!InRect(m_impCard, mx, my)) { m_impOpen = false; return; }
+        }
+        if (in.keyDown[VK_ESCAPE]) { m_impOpen = false; return; }
+        return;
+    }
+
     // G3 动效计时：弹卡 / 翻面
     m_popT += dt;
     if (m_flipT < 1.0f) {
@@ -1631,6 +1816,8 @@ void QuizBoxView::Update(float dt, const Input& in)
             m_view = V_NEBULA; m_viewT = 0.0f; m_hoverNeb = -1;
             return;
         }
+        // G4：导入题库入口
+        if (InRect(m_impBtn, mx, my)) { BrowseImport(); return; }
         for (size_t i = 0; i < m_boxRects.size(); ++i) {
             if (InRect(m_boxRects[i], mx, my)) {
                 if (InRect(m_boxDelRects[i], mx, my)) {
@@ -1781,6 +1968,75 @@ void QuizBoxView::Paint(Canvas& cv)
     // T3 制卡弹窗（最上层）
     if (m_ceOpen) DrawCardEditor(cv, s);
 
+    // G4 导入预览弹窗（最上层）
+    if (m_impOpen) {
+        const auto& pal2 = cv.Pal();
+        float W = m_area.right - m_area.left;
+        float H = m_area.bottom - m_area.top;
+        cv.FillRect(m_area, WithAlpha(pal2.ink900, 0.5f));
+        float cw2 = (std::min)(620.0f, W - 80.0f);
+        float ch2 = (std::min)(470.0f, H - 60.0f);
+        float px2 = (W - cw2) * 0.5f, py2 = (H - ch2) * 0.5f;
+        m_impCard = { px2, py2, px2 + cw2, py2 + ch2 };
+        cv.PaperCard(m_impCard, 0.4f, shape::kEdge);
+        cv.DoubleFrame(m_impCard, WithAlpha(pal2.seal, 0.8f));
+
+        TextStyle ttl; ttl.role = FontRole::Serif; ttl.size = 20.0f;
+        ttl.weight = DWRITE_FONT_WEIGHT_BOLD; ttl.letterSpacing = 1.4f;
+        cv.Text(L"导 入 题 库", { px2 + 26.0f, py2 + 18.0f, px2 + cw2 - 200.0f, py2 + 48.0f }, ttl, pal2.ink900);
+        // 文件名
+        size_t slash = m_impFile.find_last_of(L"\\/");
+        std::wstring fname = slash == std::wstring::npos ? m_impFile : m_impFile.substr(slash + 1);
+        TextStyle fs; fs.role = FontRole::Mono; fs.size = 10.5f; fs.hAlign = HAlign::Right;
+        fs.vAlign = VAlign::Middle;
+        cv.Text(fname, { px2 + cw2 - 280.0f, py2 + 20.0f, px2 + cw2 - 26.0f, py2 + 46.0f }, fs, pal2.ink300);
+        cv.PerforationH(px2 + 26.0f, px2 + cw2 - 26.0f, py2 + 62.0f, WithAlpha(pal2.ruleStrong, 0.5f));
+
+        // 摘要：每盒一块（盒名 + 卡数 + 前 2 张题面预览）
+        float iy = py2 + 76.0f;
+        int totalCards2 = 0;
+        for (auto& ib : m_impBoxes) totalCards2 += (int)ib.cards.size();
+        for (size_t i = 0; i < m_impBoxes.size() && iy < py2 + ch2 - 80.0f; ++i) {
+            const auto& ib = m_impBoxes[i];
+            TextStyle bn; bn.role = FontRole::Serif; bn.size = 16.0f;
+            bn.weight = DWRITE_FONT_WEIGHT_BOLD;
+            wchar_t bns[96];
+            swprintf_s(bns, L"%s · %d 张", ib.name.c_str(), (int)ib.cards.size());
+            cv.Text(bns, { px2 + 30.0f, iy, px2 + cw2 - 30.0f, iy + 24.0f }, bn, pal2.ink900);
+            iy += 26.0f;
+            for (size_t k = 0; k < ib.cards.size() && k < 2 && iy < py2 + ch2 - 80.0f; ++k) {
+                TextStyle pl; pl.size = 12.0f; pl.role = FontRole::Sans;
+                std::wstring fr = ib.cards[k].front;
+                if (fr.size() > 40) fr = fr.substr(0, 40) + L"…";
+                cv.Text(L"· " + fr, { px2 + 44.0f, iy, px2 + cw2 - 40.0f, iy + 20.0f }, pl, pal2.ink500);
+                iy += 20.0f;
+            }
+            if (ib.cards.size() > 2) {
+                TextStyle et; et.size = 11.0f; et.role = FontRole::Mono;
+                wchar_t em[48];
+                swprintf_s(em, L"… 其余 %d 张", (int)ib.cards.size() - 2);
+                cv.Text(em, { px2 + 44.0f, iy, px2 + cw2 - 40.0f, iy + 18.0f }, et, pal2.ink300);
+                iy += 22.0f;
+            }
+            iy += 8.0f;
+        }
+
+        // 底部按钮
+        float by2 = py2 + ch2 - 62.0f;
+        m_impCancelR = { px2 + 26.0f, by2, px2 + 26.0f + 96.0f, by2 + 42.0f };
+        m_impOkR     = { px2 + cw2 - 26.0f - 220.0f, by2, px2 + cw2 - 26.0f, by2 + 42.0f };
+        cv.FillRoundRect(m_impCancelR, 6.0f, pal2.paperLo);
+        cv.StrokeRoundRect(m_impCancelR, 6.0f, pal2.rule, shape::kHair);
+        TextStyle bts2; bts2.size = 13.0f; bts2.role = FontRole::Sans;
+        bts2.weight = DWRITE_FONT_WEIGHT_SEMI_BOLD;
+        bts2.hAlign = HAlign::Center; bts2.vAlign = VAlign::Middle; bts2.letterSpacing = 1.0f;
+        cv.Text(L"取消", m_impCancelR, bts2, pal2.ink700);
+        cv.FillRoundRect(m_impOkR, 6.0f, pal2.seal);
+        wchar_t ok[64];
+        swprintf_s(ok, L"导入 %d 盒 %d 张卡片", (int)m_impBoxes.size(), totalCards2);
+        cv.Text(ok, m_impOkR, bts2, pal2.paperHi);
+    }
+
     // Toast
     if (m_toastT > 0.0f) {
         float a = Clamp01(m_toastT / 0.5f);
@@ -1838,15 +2094,92 @@ void QuizBoxView::DebugForcePreview()
     OpenCardEditor(&demo);
 }
 
+// ============================================================
+//  G4 T6：导入题库（选文件 → 解析 → 预览 → 确认导入）
+// ============================================================
+void QuizBoxView::BrowseImport()
+{
+    wchar_t path[MAX_PATH] = { 0 };
+    OPENFILENAMEW ofn = { 0 };
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = GetActiveWindow();
+    ofn.lpstrFilter = L"题库文件 (*.md;*.markdown;*.csv;*.txt)\0*.md;*.markdown;*.csv;*.txt\0所有文件 (*.*)\0*.*\0";
+    ofn.lpstrFile = path;
+    ofn.nMaxFile = MAX_PATH;
+    ofn.lpstrTitle = L"选择要导入的题库文件";
+    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_EXPLORER;
+    if (!GetOpenFileNameW(&ofn)) return;
+
+    std::wstring src = ReadImportFile(path);
+    if (src.empty()) { Toast(L"文件读取失败或为空"); return; }
+
+    // 扩展名分派：md/txt → md 解析；csv → csv 解析
+    std::wstring p = path;
+    size_t dot = p.find_last_of(L'.');
+    std::wstring ext = dot == std::wstring::npos ? L"" : p.substr(dot);
+    for (auto& c : ext) c = (wchar_t)towlower(c);
+    m_impBoxes = (ext == L".csv") ? ParseImportCsv(src) : ParseImportMd(src);
+
+    int total = 0;
+    for (auto& ib : m_impBoxes) total += (int)ib.cards.size();
+    if (m_impBoxes.empty() || total == 0) {
+        Toast(L"没有解析到卡片——检查格式（# 盒 / ## 题面 / - A: 答案）");
+        return;
+    }
+    m_impFile = path;
+    m_impOpen = true;
+}
+
+void QuizBoxView::DoImport()
+{
+    if (m_curSet < 0 || m_curSet >= (int)m_sets.size()) { m_impOpen = false; return; }
+    const auto& st = m_sets[m_curSet];
+    int total = 0;
+    for (auto& ib : m_impBoxes) {
+        // 同名盒合并；否则新建
+        std::wstring targetId;
+        for (const auto& b : st.boxes)
+            if (b.name == ib.name) { targetId = b.id; break; }
+        if (targetId.empty()) {
+            BoxStore::Instance().AddBox(st.id, ib.name.empty() ? L"导入题盒" : ib.name, ib.kind);
+            auto sets2 = BoxStore::Instance().Load();
+            for (const auto& s2 : sets2)
+                if (s2.id == st.id)
+                    for (const auto& b2 : s2.boxes)
+                        if (b2.name == ib.name) { targetId = b2.id; break; }
+        }
+        if (!targetId.empty())
+            for (const auto& c : ib.cards) {
+                BoxStore::Instance().AddCard(targetId, c);
+                ++total;
+            }
+    }
+    m_sets = BoxStore::Instance().Load();
+    m_impOpen = false;
+    wchar_t msg[80];
+    swprintf_s(msg, L"已导入 %d 张卡片", total);
+    Toast(msg);
+}
+
 void QuizBoxView::DebugForceOpen()
 {
-    // --edit 截图：G5 星云态（轨道 + 中心房子 + 难度色小方块）
+    // --edit 截图：G4 导入预览弹窗（含示例解析结果）
     if (m_sets.empty()) DebugForcePreview();
     if (!m_sets.empty()) {
-        m_view = V_NEBULA; m_viewT = 1.0f;
+        m_view = V_BOXES; m_viewT = 1.0f;
         m_curSet = 0;
-        m_hoverNeb = -1;
-        m_orbit = 0.5f;
+        m_impBoxes.clear();
+        QuizBoxImpBox b1;
+        b1.name = L"常识判断";
+        QCard c1; c1.front = L"下列关于宪法的说法正确的是？"; c1.back = L"宪法是根本大法。";
+        c1.tag = L"常识"; c1.difficulty = 2;
+        QCard c2; c2.front = L"行政处罚的种类不包括？"; c2.back = L"罚金（属刑罚）。";
+        c2.tag = L"常识"; c2.difficulty = 4;
+        QCard c3; c3.front = c1.front; c3.back = c1.back; c3.tag = L"常识"; c3.difficulty = 3;
+        b1.cards = { c1, c2, c3 };
+        m_impBoxes.push_back(b1);
+        m_impFile = L"C:\\题库\\行测常识.md";
+        m_impOpen = true;
     }
 }
 

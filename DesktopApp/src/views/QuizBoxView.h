@@ -13,6 +13,14 @@
 
 namespace lj {
 
+// G4 T6：导入解析结果（md/csv → 盒 + 卡）
+struct QuizBoxImpBox
+{
+    std::wstring name;
+    int kind = 0;
+    std::vector<QCard> cards;
+};
+
 class QuizBoxView : public View
 {
 public:
@@ -56,6 +64,15 @@ private:
     std::vector<D2D1_RECT_F> m_boxRects, m_boxRenRects, m_boxDelRects;
     D2D1_RECT_F m_newBoxRect{};
     D2D1_RECT_F m_nebBtn{};           // G5：盒架「🌌 星云」入口
+    D2D1_RECT_F m_impBtn{};           // G4：盒架「📥 导入题库」入口
+
+    // ---- G4：T6 导入题库（md/csv 符号解析 + 预览确认）----
+    bool  m_impOpen = false;
+    std::wstring m_impFile;
+    std::vector<QuizBoxImpBox> m_impBoxes;
+    D2D1_RECT_F m_impCard{}, m_impOkR{}, m_impCancelR{};
+    void BrowseImport();             // 选文件 → 解析 → 预览弹窗
+    void DoImport();                 // 确认导入（同名盒合并，否则新建）
     D2D1_RECT_F m_backRect{}, m_drawBtn{}, m_addBtn{};
     std::vector<D2D1_RECT_F> m_cardRects, m_cardDelRects;
     D2D1_RECT_F m_flipRect{}, m_nextRect{}, m_backDrawRect{};
