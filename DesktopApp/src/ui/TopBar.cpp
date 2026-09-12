@@ -87,6 +87,7 @@ void TopBar::Init()
         { L"资料库", L"materials" },
         { L"知识库", L"knowledge" },
         { L"练考",   L"quiz"      },
+        { L"题盒",   L"quizbox"   },
         { L"复盘",   L"review"    },
     };
     m_tabs.clear();

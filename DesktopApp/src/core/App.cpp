@@ -29,6 +29,7 @@
 #include "views/ExamReportView.h" // F-D6 考场模式：模考报告 / 开始入口
 #include "views/ReviewView.h"      // F-D7 本地复盘搭子（规则版）
 #include "views/QuizView.h"       // 练考模块 Phase 1（阅读器 + 答题卡）
+#include "views/QuizBoxView.h"    // 批次 G：题集卡片盒（抽卡回顾）
 #include "views/SettingsView.h"    // 全局设置页（route=settings，账户弹层「设置」进入）
 #include "core/ExamMode.h"        // F-D6 考场模式：全屏 HUD + 中断检测
 #include "core/ReviewNudge.h"      // F-D7 增强：复盘每日自动 nudge
@@ -411,6 +412,7 @@ void App::BuildViews()
     add(std::make_unique<ExamReportView>());// F-D6 考场模式：模考报告 / 开始入口
     add(std::make_unique<ReviewView>());     // F-D7 本地复盘搭子（规则版）
     add(std::make_unique<QuizView>());       // 练考模块 Phase 1（阅读器 + 答题卡）
+    add(std::make_unique<QuizBoxView>());    // 批次 G：题集卡片盒（抽卡回顾）
     add(std::make_unique<SettingsView>());    // 全局设置页（账户弹层「设置」进入，整合 通用/练考）
     add(std::make_unique<LoginView>());    // 登录 / 注册 / 访客入口（退出登录 / 未登录点胶囊都要跳到这里）
 }
