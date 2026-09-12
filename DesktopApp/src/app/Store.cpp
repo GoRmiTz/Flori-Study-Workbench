@@ -414,6 +414,7 @@ AppSettings CheckinStore::LoadSettings()
     // 专注体系（批次 C）
     if (auto* fi = JGet(v, "focusItem"))       s.focusItem = U2W(fi->str);
     if (auto* ff = JGet(v, "focusFullscreen")) s.focusFullscreen = (ff->num != 0);
+    if (auto* fd = JGet(v, "focusItemDirect")) s.focusItemDirect = (fd->num != 0);
 
     return s;
 }
@@ -460,7 +461,8 @@ void CheckinStore::SaveSettings(const AppSettings& s)
     out += "  \"musicDir\": " + JQuote(W2U(s.musicDir)) + ",\n";
     // 专注体系（批次 C）
     out += "  \"focusItem\": " + JQuote(W2U(s.focusItem)) + ",\n";
-    out += "  \"focusFullscreen\": " + std::string(s.focusFullscreen ? "1" : "0") + "\n";
+    out += "  \"focusFullscreen\": " + std::string(s.focusFullscreen ? "1" : "0") + ",\n";
+    out += "  \"focusItemDirect\": " + std::string(s.focusItemDirect ? "1" : "0") + "\n";
     out += "}\n";
     WriteFileRaw(SettingsFilePath(), out);
     Cloud::Instance().MarkDirty();   // 写盘即打脏：后台线程防抖后静默上推

@@ -42,12 +42,15 @@ public:
 struct AlertOverlay
 {
     bool   active = false;
-    int    mode = 0;          // 0=专注警告（双按钮） 1=成功（单按钮）
+    int    mode = 0;          // 0=专注警告（双按钮） 1=成功（单按钮） 2=已设为当前专注项
     std::wstring title;
     std::wstring line1;
     std::wstring line2;
     D2D1_RECT_F btnOk{};
     D2D1_RECT_F btnLog{};     // 仅 mode=0 用（记一段专注）
+    D2D1_RECT_F btnSkip{};    // 仅 mode=2 用（去自习室）
+    D2D1_RECT_F chk{};        // 仅 mode=2 用（以后不再提醒，直接跳转）
+    bool  chkOn = false;
     D2D1_RECT_F card{};
 };
 
@@ -73,6 +76,7 @@ public:
     void Layout(const D2D1_RECT_F& area, Canvas& cv) override;
     void Update(float dt, const Input& in) override;
     void Paint(Canvas& cv) override;
+    void DebugForcePreview() override;   // 截图自检：弹出「已设为当前专注项」层
 
 private:
     void Recompute();

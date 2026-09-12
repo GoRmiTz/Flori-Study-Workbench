@@ -196,6 +196,8 @@ private:
     float m_mouseIdle = 99.0f;      // 鼠标静止秒数（全屏模式渐显用）
     float m_lastMx = -1.0f, m_lastMy = -1.0f;
     D2D1_RECT_F m_ovPill{};         // 全屏模式顶部小圆角框
+    D2D1_RECT_F m_ovPillPause{};    // 小框内：暂停/继续
+    D2D1_RECT_F m_ovPillExit{};     // 小框内：结束专注
     void CancelFocusItem();         // 取消自定义专注项 → 恢复时段建议
     void ReloadFocusPrefs();        // 从 settings 读 focusItem / focusFullscreen
     void PlayMusic();               // 播放 meta 匹配的曲目（无匹配取第一首）；暂停→继续

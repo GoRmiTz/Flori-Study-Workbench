@@ -69,6 +69,8 @@ struct AppSettings
     // 开始专注时覆盖层是否全屏（false = 只盖自习室内容区）。
     // 全屏模式：鼠标静止 2s 渐显专注信息，移动时仅顶部小圆角框。
     bool focusFullscreen = false;
+    // 打卡页设专注项后不再弹提醒，直接跳转自习室（用户勾选记住）。
+    bool focusItemDirect = false;
 
     // ---- 关闭按钮行为 ----
     // 0 = 每次询问（弹自绘确认层）1 = 直接退出 2 = 最小化到托盘

@@ -17,6 +17,46 @@
 
 namespace lj {
 
+// ============================================================
+//  批次 C：主窗口设备全屏（盖住任务栏，非软件内全屏）
+//  专注全屏覆盖开启时切无边框置顶全屏，专注结束恢复原样。
+// ============================================================
+static bool g_devFs = false;
+static LONG  g_devFsOldStyle = 0;
+static WINDOWPLACEMENT g_devFsOldPlc{};
+
+static void EnterDeviceFullscreen()
+{
+    HWND hw = AppHwnd();
+    if (!hw || g_devFs) return;
+    HMONITOR mon = MonitorFromWindow(hw, MONITOR_DEFAULTTONEAREST);
+    MONITORINFO mi{ sizeof(mi) };
+    if (!GetMonitorInfoW(mon, &mi)) return;
+    g_devFsOldStyle = (LONG)GetWindowLongW(hw, GWL_STYLE);
+    g_devFsOldPlc.length = sizeof(g_devFsOldPlc);
+    GetWindowPlacement(hw, &g_devFsOldPlc);
+    SetWindowLongW(hw, GWL_STYLE,
+                   g_devFsOldStyle & ~(WS_CAPTION | WS_THICKFRAME | WS_SYSMENU |
+                                       WS_MINIMIZEBOX | WS_MAXIMIZEBOX));
+    SetWindowPos(hw, HWND_TOPMOST,
+                 mi.rcMonitor.left, mi.rcMonitor.top,
+                 mi.rcMonitor.right - mi.rcMonitor.left,
+                 mi.rcMonitor.bottom - mi.rcMonitor.top,
+                 SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
+    g_devFs = true;
+}
+
+static void ExitDeviceFullscreen()
+{
+    HWND hw = AppHwnd();
+    if (!hw || !g_devFs) return;
+    SetWindowLongW(hw, GWL_STYLE, g_devFsOldStyle);
+    SetWindowPlacement(hw, &g_devFsOldPlc);
+    SetWindowPos(hw, HWND_NOTOPMOST, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_FRAMECHANGED);
+    g_devFs = false;
+}
+
 // 本地自习室定义（无服务端，纯本地「房间」概念）
 const RoomView::RoomDef RoomView::kRooms[3] = {
     { L"public", L"公", L"公共自习室", L"人数不限，所有人共处一室", Hex(0x6B2A35) },
@@ -131,6 +171,7 @@ void RoomView::OnEnter()
 
 void RoomView::OnLeave()
 {
+    ExitDeviceFullscreen();   // 批次 C：保险——离开自习室时若仍在设备全屏则恢复
     // 注销本视图注册的下行处理器，避免离开后仍回调已失效的视图；
     // 并显式离房（服务器会广播在场变化）。
     auto rt = &Realtime::Instance();
@@ -720,6 +761,7 @@ void RoomView::ToggleStart()
         m_focusStart = (long long)std::time(nullptr);
         m_timer = TimerState::Running;
         AutoStartMusic();   // 批次 B：开始专注自动播放背景音乐
+        if (m_focusFs) EnterDeviceFullscreen();   // 批次 C：电脑全屏（盖任务栏）
     } else if (m_timer == TimerState::Running) {
         m_timer = TimerState::Paused;
     } else {
@@ -739,12 +781,14 @@ void RoomView::ResetTimer()
 {
     m_timer = TimerState::Idle;
     m_remain = (float)m_presetMin * 60.0f;
+    ExitDeviceFullscreen();   // 批次 C：退出设备全屏
 }
 
 void RoomView::CancelFocus()
 {
     m_timer = TimerState::Idle;
     m_remain = (float)m_presetMin * 60.0f;
+    ExitDeviceFullscreen();   // 批次 C：退出设备全屏
 }
 
 void RoomView::CompleteFocus()
@@ -760,6 +804,7 @@ void RoomView::CompleteFocus()
     m_remain = (float)m_presetMin * 60.0f;
     RecomputeStats();
     SendMyPresence();
+    ExitDeviceFullscreen();   // 批次 C：专注完成退出设备全屏
 
     // ---- #71 专注结束提醒 ----
     // 用户可能正盯着别的窗口（看网课视频），所以三路都要给：
@@ -1186,6 +1231,18 @@ void RoomView::Update(float dt, const Input& in)
                        in.mouseY >= (std::min)(m_ovPrev.top, m_ovVol.top) &&
                        in.mouseY <= (std::max)(m_ovPrev.bottom, m_ovVol.bottom);
         if (overCtl) m_overInteractive = true;
+    }
+
+    // ---- 批次 C：全屏顶部小圆角框的功能键（移动态显示时才响应）----
+    if (m_focusFs && active && m_mouseIdle < 1.6f && in.clicked) {
+        auto hit = [](const D2D1_RECT_F& r, float x, float y) {
+            return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+        };
+        if (hit(m_ovPillPause, in.mouseX, in.mouseY)) {
+            ToggleStart();   // 运行↔暂停（不退全屏）
+        } else if (hit(m_ovPillExit, in.mouseX, in.mouseY)) {
+            ResetTimer();    // 结束本次专注（ResetTimer 内退出设备全屏）
+        }
     }
 
     // ---- §3 聊天输入（房间内且非静音房）----
@@ -1796,18 +1853,48 @@ void RoomView::PaintFocusOverlay(Canvas& cv)
     float pa = m_focusFs ? Clamp01((m_mouseIdle - 1.6f) / 0.6f) : 1.0f;
 
     if (m_focusFs && pa < 0.98f) {
-        // 顶部小圆角框：剩余时间 + 当前打卡项
+        // 顶部小圆角框：剩余时间 + 当前打卡项 + 暂停/继续 + 结束专注
         int ttotal = (int)std::ceil(m_remain);
         wchar_t tb[16];
         swprintf_s(tb, L"%02d:%02d", ttotal / 60, ttotal % 60);
-        float pw = 360.0f, ph = 40.0f;
+        float pw = 480.0f, ph = 44.0f;
         m_ovPill = { cx - pw * 0.5f, m_area.top + 16.0f, cx + pw * 0.5f, m_area.top + 16.0f + ph };
         cv.PushOpacity(a * (1.0f - pa));
         cv.FillRoundRect(m_ovPill, ph * 0.5f, pal.paperHi);
         cv.StrokeRoundRect(m_ovPill, ph * 0.5f, pal.rule, shape::kHair);
-        TextStyle pt; pt.role = FontRole::Sans; pt.size = 13.0f;
+        TextStyle pt; pt.role = FontRole::Sans; pt.size = 13.5f;
         pt.hAlign = HAlign::Center; pt.vAlign = VAlign::Middle;
-        cv.Text(std::wstring(tb) + L"  ·  " + CurrentArrangement(), m_ovPill, pt, pal.ink900);
+        cv.Text(std::wstring(tb) + L"  ·  " + CurrentArrangement(),
+                { m_ovPill.left + 16.0f, m_ovPill.top, m_ovPill.right - 96.0f, m_ovPill.bottom },
+                pt, pal.ink900);
+
+        // 功能键：暂停/继续（左）+ 结束专注（右，朱砂）
+        bool paused = (m_timer == TimerState::Paused);
+        float by0 = m_ovPill.top + 8.0f, by1 = m_ovPill.bottom - 8.0f;
+        m_ovPillPause = { m_ovPill.right - 88.0f, by0, m_ovPill.right - 50.0f, by1 };
+        m_ovPillExit  = { m_ovPill.right - 44.0f, by0, m_ovPill.right - 8.0f, by1 };
+        // 暂停/继续：描边圆，双竖线或三角
+        {
+            float pcx = (m_ovPillPause.left + m_ovPillPause.right) * 0.5f;
+            float pcy = (m_ovPillPause.top + m_ovPillPause.bottom) * 0.5f;
+            cv.StrokeCircle(pcx, pcy, 14.0f, pal.rule, shape::kHair);
+            if (paused) {
+                cv.Line(pcx - 4.0f, pcy - 6.0f, pcx + 6.0f, pcy, pal.ink700, 2.0f);
+                cv.Line(pcx + 6.0f, pcy, pcx - 4.0f, pcy + 6.0f, pal.ink700, 2.0f);
+                cv.Line(pcx - 4.0f, pcy + 6.0f, pcx - 4.0f, pcy - 6.0f, pal.ink700, 2.0f);
+            } else {
+                cv.Line(pcx - 3.0f, pcy - 5.0f, pcx - 3.0f, pcy + 5.0f, pal.ink700, 2.4f);
+                cv.Line(pcx + 3.0f, pcy - 5.0f, pcx + 3.0f, pcy + 5.0f, pal.ink700, 2.4f);
+            }
+        }
+        // 结束：朱砂圆 + ✕
+        {
+            float ecx = (m_ovPillExit.left + m_ovPillExit.right) * 0.5f;
+            float ecy = (m_ovPillExit.top + m_ovPillExit.bottom) * 0.5f;
+            cv.FillCircle(ecx, ecy, 14.0f, pal.seal);
+            cv.Line(ecx - 4.5f, ecy - 4.5f, ecx + 4.5f, ecy + 4.5f, pal.paperHi, 2.2f);
+            cv.Line(ecx + 4.5f, ecy - 4.5f, ecx - 4.5f, ecy + 4.5f, pal.paperHi, 2.2f);
+        }
         cv.PopOpacity();
     } else {
         m_ovPill = {};

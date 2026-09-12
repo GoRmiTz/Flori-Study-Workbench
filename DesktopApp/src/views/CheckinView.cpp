@@ -358,6 +358,22 @@ void CheckinView::Update(float dt, const Input& in)
             if (m_alert.active) {
                 if (m_alert.mode == 0 && Hit(m_alert.btnLog, mx, my)) {
                     LogFocusNow(); m_alert.active = false;
+                } else if (m_alert.mode == 2) {
+                    if (Hit(m_alert.btnSkip, mx, my)) {
+                        if (m_alert.chkOn) {
+                            auto s = CheckinStore::Instance().LoadSettings();
+                            s.focusItemDirect = true;
+                            CheckinStore::Instance().SaveSettings(s);
+                        }
+                        m_alert.active = false;
+                        Go(L"room");
+                    } else if (Hit(m_alert.chk, mx, my)) {
+                        m_alert.chkOn = !m_alert.chkOn;   // 勾选在点「去自习室」时才落盘
+                    } else if (Hit(m_alert.btnOk, mx, my)) {
+                        m_alert.active = false;
+                    } else if (!Hit(m_alert.card, mx, my)) {
+                        m_alert.active = false;   // 点卡外关闭
+                    }
                 } else if (Hit(m_alert.btnOk, mx, my)) {
                     m_alert.active = false;
                 }
@@ -399,13 +415,23 @@ void CheckinView::Update(float dt, const Input& in)
 }
 
 // 批次 C：把打卡项设为自习室「当前专注项」（落盘 settings.focusItem，
-// 自习室内可取消恢复时段建议）
+// 自习室内可取消恢复时段建议）。勾选过「不再提醒」时直接跳转自习室。
 void CheckinView::SetFocusItem(const CheckItem& it)
 {
     auto s = CheckinStore::Instance().LoadSettings();
     s.focusItem = it.title;
+    bool direct = s.focusItemDirect;
     CheckinStore::Instance().SaveSettings(s);
-    ShowSuccess(L"已设为当前专注项 · 开始专注将围绕「" + it.title + L"」，自习室内可取消");
+    if (direct) { Go(L"room"); return; }
+
+    m_alert.active = true;
+    m_alert.mode = 2;
+    m_alert.title = L"已设为当前专注项";
+    m_alert.line1 = L"开始专注将围绕「" + it.title + L"」，在自习室可随时「取消固定」"
+                    L"恢复按当前时段自动建议。";
+    m_alert.line2.clear();
+    m_alert.chkOn = false;
+    m_overlayA.target = 1.0f;
 }
 
 void CheckinView::Paint(Canvas& cv)
@@ -623,7 +649,7 @@ void CheckinView::ComputeOverlayRects()
     const float aw = (std::min)(440.0f, m_area.right - m_area.left - 80.0f);
     const float ax = cx - aw / 2.0f;
     const float ay = m_area.top + 110.0f;
-    const float ah = m_alert.mode == 0 ? 196.0f : 150.0f;
+    const float ah = m_alert.mode == 0 ? 196.0f : m_alert.mode == 2 ? 236.0f : 150.0f;
     m_alert.card = { ax, ay, ax + aw, ay + ah };
 
     const float bw = 150.0f, bh = 42.0f;
@@ -633,6 +659,14 @@ void CheckinView::ComputeOverlayRects()
                            ax + aw / 2.0f - gap / 2.0f, ay + ah - 18.0f };
         m_alert.btnOk  = { ax + aw / 2.0f + gap / 2.0f, ay + ah - 60.0f,
                            ax + aw / 2.0f + gap / 2.0f + bw, ay + ah - 18.0f };
+    } else if (m_alert.mode == 2) {
+        // 专属布局：勾选行 + 双按钮（去自习室 primary / 留在这里 secondary）
+        m_alert.chk = { ax + 28.0f, ay + ah - 92.0f, ax + 28.0f + 18.0f, ay + ah - 74.0f };
+        const float gap = 14.0f;
+        m_alert.btnSkip = { ax + aw / 2.0f - bw - gap / 2.0f, ay + ah - 60.0f,
+                            ax + aw / 2.0f - gap / 2.0f, ay + ah - 18.0f };
+        m_alert.btnOk   = { ax + aw / 2.0f + gap / 2.0f, ay + ah - 60.0f,
+                            ax + aw / 2.0f + gap / 2.0f + bw, ay + ah - 18.0f };
     } else {
         m_alert.btnOk = { cx - bw / 2.0f, ay + ah - 54.0f, cx + bw / 2.0f, ay + ah - 12.0f };
     }
@@ -690,22 +724,54 @@ void CheckinView::PaintOverlay(Canvas& cv)
         cv.PaperCard(m_alert.card, 0.4f, shape::kEdge);
         cv.DoubleFrame(m_alert.card, WithAlpha(pal.seal, 0.8f));
 
-        TextStyle ttl; ttl.role = FontRole::Serif; ttl.size = 22.0f;
-        ttl.weight = DWRITE_FONT_WEIGHT_BOLD; ttl.letterSpacing = 2.0f;
-        cv.Text(m_alert.title, { m_alert.card.left + 28.0f, m_alert.card.top + 22.0f,
-                  m_alert.card.right - 28.0f, m_alert.card.top + 54.0f }, ttl, pal.seal);
+        if (m_alert.mode != 2) {
+            // 通用布局（警告 / 成功）：标题 + 两行正文；mode=2 有专属宽松布局
+            TextStyle ttl; ttl.role = FontRole::Serif; ttl.size = 22.0f;
+            ttl.weight = DWRITE_FONT_WEIGHT_BOLD; ttl.letterSpacing = 2.0f;
+            cv.Text(m_alert.title, { m_alert.card.left + 28.0f, m_alert.card.top + 22.0f,
+                      m_alert.card.right - 28.0f, m_alert.card.top + 54.0f }, ttl, pal.seal);
 
-        TextStyle tx1; tx1.role = FontRole::Sans; tx1.size = 13.5f; tx1.vAlign = VAlign::Top;
-        cv.Text(m_alert.line1, { m_alert.card.left + 28.0f, m_alert.card.top + 70.0f,
-                 m_alert.card.right - 28.0f, m_alert.card.top + 120.0f }, tx1, pal.ink700);
-        TextStyle tx2; tx2.role = FontRole::Sans; tx2.size = 13.5f; tx2.vAlign = VAlign::Top;
-        tx2.weight = DWRITE_FONT_WEIGHT_SEMI_BOLD;
-        cv.Text(m_alert.line2, { m_alert.card.left + 28.0f, m_alert.card.top + 122.0f,
-                 m_alert.card.right - 28.0f, m_alert.card.top + 170.0f }, tx2, pal.vermilion);
+            TextStyle tx1; tx1.role = FontRole::Sans; tx1.size = 13.5f; tx1.vAlign = VAlign::Top;
+            cv.Text(m_alert.line1, { m_alert.card.left + 28.0f, m_alert.card.top + 70.0f,
+                     m_alert.card.right - 28.0f, m_alert.card.top + 120.0f }, tx1, pal.ink700);
+            TextStyle tx2; tx2.role = FontRole::Sans; tx2.size = 13.5f; tx2.vAlign = VAlign::Top;
+            tx2.weight = DWRITE_FONT_WEIGHT_SEMI_BOLD;
+            cv.Text(m_alert.line2, { m_alert.card.left + 28.0f, m_alert.card.top + 122.0f,
+                     m_alert.card.right - 28.0f, m_alert.card.top + 170.0f }, tx2, pal.vermilion);
+        }
 
         if (m_alert.mode == 0) {
             DrawBtn(m_alert.btnLog, L"记一段专注", true);
             DrawBtn(m_alert.btnOk, L"知道了", false);
+        } else if (m_alert.mode == 2) {
+            // 批次 C：已设为当前专注项（宽松布局：标题 / 正文 / 勾选 / 双按钮）
+            TextStyle ttl2; ttl2.role = FontRole::Serif; ttl2.size = 22.0f;
+            ttl2.weight = DWRITE_FONT_WEIGHT_BOLD; ttl2.letterSpacing = 2.0f;
+            cv.Text(m_alert.title, { m_alert.card.left + 28.0f, m_alert.card.top + 26.0f,
+                      m_alert.card.right - 28.0f, m_alert.card.top + 58.0f }, ttl2, pal.seal);
+            cv.PerforationH(m_alert.card.left + 28.0f, m_alert.card.right - 28.0f,
+                            m_alert.card.top + 68.0f, WithAlpha(pal.ruleStrong, 0.5f));
+            TextStyle tx; tx.role = FontRole::Sans; tx.size = 13.5f; tx.vAlign = VAlign::Top;
+            cv.Text(m_alert.line1, { m_alert.card.left + 28.0f, m_alert.card.top + 84.0f,
+                     m_alert.card.right - 28.0f, m_alert.card.top + 128.0f }, tx, pal.ink700);
+
+            // 「以后不再提醒，直接跳转自习室」勾选
+            D2D1_RECT_F ck = m_alert.chk;
+            if (m_alert.chkOn) {
+                cv.FillRoundRect(ck, 3.0f, pal.seal);
+                float cmx = (ck.left + ck.right) * 0.5f, cmy = (ck.top + ck.bottom) * 0.5f;
+                cv.Line(cmx - 3.5f, cmy + 0.5f, cmx - 1.0f, cmy + 3.0f, pal.paperHi, 1.8f);
+                cv.Line(cmx - 1.0f, cmy + 3.0f, cmx + 4.0f, cmy - 3.0f, pal.paperHi, 1.8f);
+            } else {
+                cv.StrokeRoundRect(ck, 3.0f, pal.ink500, shape::kHair);
+            }
+            TextStyle ct; ct.role = FontRole::Sans; ct.size = 12.0f; ct.vAlign = VAlign::Middle;
+            cv.Text(L"以后不再提醒，直接跳转自习室",
+                    { ck.right + 10.0f, ck.top - 4.0f, m_alert.card.right - 28.0f, ck.bottom + 4.0f },
+                    ct, pal.ink500);
+
+            DrawBtn(m_alert.btnSkip, L"去自习室 →", true);
+            DrawBtn(m_alert.btnOk, L"留在这里", false);
         } else {
             DrawBtn(m_alert.btnOk, L"知道了", true);
         }
@@ -865,6 +931,23 @@ void CheckinView::LogFocusNow()
     fs.min = 25;
     fs.tag = L"自习室";
     CheckinStore::Instance().AddFocus(fs);
+}
+
+// 批次 C：截图自检——直接弹出「已设为当前专注项」层验证布局
+void CheckinView::DebugForcePreview()
+{
+    // 注意：Layout 的懒初始化（!m_built → OnEnter）会清掉弹层，
+    // GoTo 时 OnEnter 已完成数据加载，这里置 m_built 跳过二次 OnEnter。
+    m_built = true;
+    m_alert.active = true;
+    m_alert.mode = 2;
+    m_alert.title = L"已设为当前专注项";
+    m_alert.line1 = L"开始专注将围绕「行测专项刷题」，在自习室可随时「取消固定」"
+                    L"恢复按当前时段自动建议。";
+    m_alert.line2.clear();
+    m_alert.chkOn = false;
+    m_overlayA.target = 1.0f;
+    m_overlayA.Snap(1.0f);
 }
 
 void CheckinView::ShowSuccess(const std::wstring& msg)
