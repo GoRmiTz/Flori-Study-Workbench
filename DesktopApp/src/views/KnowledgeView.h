@@ -11,6 +11,7 @@
 #include "app/Store.h"
 #include "ui/Layout.h"
 #include "ui/MarkdownView.h"
+#include "ui/FieldEdit.h"
 #include <vector>
 
 namespace lj {
@@ -47,6 +48,15 @@ private:
     std::vector<lj::MarkdownView> m_md;
     std::vector<bool>        m_mdMode;         // true = 阅读视图（默认）
     std::vector<D2D1_RECT_F> m_mdToggleRects;
+
+    // 批次 E：标题重命名（展开态「✎ 改名」→ 标题行原地编辑）
+    FieldEdit                m_ren;
+    std::vector<D2D1_RECT_F> m_renRects;
+    bool  m_renActive = false;
+    int   m_renIdx = -1;
+    D2D1_RECT_F RenBox(int idx) const;
+    void CommitRename();
+    static std::wstring DispTitle(const KCard& c);   // 标题空 → 取正文首行（#/普通首行）
 
     Canvas*     m_cv = nullptr;   // 供展开/删除后即时重排（不依赖下一帧 Layout）
 

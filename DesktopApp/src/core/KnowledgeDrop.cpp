@@ -117,10 +117,12 @@ std::wstring ReadTextFile(const std::wstring& path)
 }
 
 // 文件拖入：单个 .md/.txt 读正文（标题取文件名），多个/其他类型记路径
-std::wstring FileDropBody(IDataObject* pdo, std::wstring& title)
+// baseDir（批次 E）：文本文件所在目录（md 图片相对路径基准），非文件拖入为空
+std::wstring FileDropBody(IDataObject* pdo, std::wstring& title, std::wstring& baseDir)
 {
     FORMATETC fe{ CF_HDROP, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL };
     STGMEDIUM sm{};
+    baseDir.clear();
     if (!SUCCEEDED(pdo->GetData(&fe, &sm)) || !sm.hGlobal) return L"";
     HDROP h = (HDROP)sm.hGlobal;
     UINT n = DragQueryFileW(h, 0xFFFFFFFF, nullptr, 0);
@@ -142,6 +144,7 @@ std::wstring FileDropBody(IDataObject* pdo, std::wstring& title)
                 if (!content.empty()) {
                     title = name;
                     body = content;
+                    if (slash != std::wstring::npos) baseDir = path.substr(0, slash);
                 }
             }
             if (body.empty()) { body = path; title.clear(); }   // 非文本文件记路径
@@ -209,17 +212,19 @@ public:
         std::wstring text = GetText(pdo);
         std::wstring title;
         std::wstring src = L"页内拖入";
+        std::wstring baseDir;
         if (text.empty()) {
-            text = FileDropBody(pdo, title);
+            text = FileDropBody(pdo, title, baseDir);
             if (!title.empty()) src = L"文件拖入";
         }
         if (!Trim(text).empty()) {
             KCard c;
-            c.id     = GenId();
-            c.title  = title.empty() ? FirstLine(text) : title;
-            c.body   = Trim(text);
-            c.source = src;
-            c.ts     = (long long)time(nullptr);
+            c.id       = GenId();
+            c.title    = title.empty() ? FirstLine(text) : title;
+            c.body     = Trim(text);
+            c.source   = src;
+            c.ts       = (long long)time(nullptr);
+            c.basePath = baseDir;   // 批次 E：md 图片相对路径基准
             CheckinStore::Instance().AddKnowledge(c);
             TrayIcon::Instance().Balloon(L"已收集考点", c.title.c_str());
             s_rev++;   // KnowledgeView 轮询 → 即时刷新 + Toast

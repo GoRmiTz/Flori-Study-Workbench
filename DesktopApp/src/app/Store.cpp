@@ -1022,6 +1022,7 @@ std::vector<KCard> CheckinStore::LoadKnowledge()
                         if (auto* x = g("body"))   c.body   = U2W(x->str);
                         if (auto* x = g("source")) c.source = U2W(x->str);
                         if (auto* x = g("tags"))   c.tags   = U2W(x->str);
+                        if (auto* x = g("basePath")) c.basePath = U2W(x->str);
                         if (auto* x = g("ts"))     c.ts     = (long long)x->num;
                         if (c.id.empty()) c.id = GenKnowledgeId();
                         out.push_back(c);
@@ -1044,6 +1045,7 @@ void CheckinStore::SaveKnowledge(const std::vector<KCard>& cards)
         out += "    \"body\": "   + JQuote(W2U(c.body))   + ",\n";
         out += "    \"source\": " + JQuote(W2U(c.source)) + ",\n";
         out += "    \"tags\": "   + JQuote(W2U(c.tags))   + ",\n";
+        out += "    \"basePath\": " + JQuote(W2U(c.basePath)) + ",\n";
         out += "    \"ts\": "     + std::to_string(c.ts)  + "\n";
         out += (i + 1 < cards.size()) ? "  },\n" : "  }\n";
     }

@@ -4,7 +4,11 @@
 //  支持按可见带剔除）。全部走 Canvas 的 DirectWrite 文本，无第三方依赖。
 // ============================================================
 #include "ui/MarkdownView.h"
+#include "core/Common.h"
+#include <wincodec.h>
 #include <cctype>
+
+#pragma comment(lib, "windowscodecs.lib")
 
 namespace lj {
 
@@ -127,6 +131,61 @@ void MarkdownView::SetMarkdown(const std::wstring& src)
         }
         if (raw.empty()) { closePara(); continue; }
 
+        // 批次 E：图片 ![alt](path)（独占一行）
+        if (raw[0] == L'!' && raw.size() > 2 && raw[1] == L'[') {
+            size_t close = raw.find(L']', 2);
+            if (close != std::wstring::npos && close + 1 < raw.size() && raw[close + 1] == L'(') {
+                size_t pe = raw.find(L')', close + 2);
+                if (pe != std::wstring::npos) {
+                    closePara();
+                    Block b; b.type = P_IMG;
+                    b.imgAlt  = raw.substr(2, close - 2);
+                    b.imgPath = raw.substr(close + 2, pe - close - 2);
+                    m_blocks.push_back(b);
+                    continue;
+                }
+            }
+        }
+
+        // 批次 E：表格 —— 当前行是分隔行（|---|---|）且**当前 para**（表头行）含 |：
+        // 收割 para 作表头、开表格块；随后连续 | 行作为数据行追加
+        {
+            bool isSep = raw.size() >= 3 && raw.find(L'|') != std::wstring::npos;
+            if (isSep) {
+                for (wchar_t c : raw) if (c != L'-' && c != L'|' && c != L':' && c != L' ') { isSep = false; break; }
+            }
+            auto splitRow = [](const std::wstring& line, std::vector<std::wstring>& out) {
+                std::wstring s = line;
+                while (!s.empty() && (s.front() == L'|' || s.front() == L' ')) s.erase(s.begin());
+                while (!s.empty() && (s.back() == L'|' || s.back() == L' ')) s.pop_back();
+                out.clear();
+                std::wstring cur;
+                for (wchar_t c : s) {
+                    if (c == L'|') { out.push_back(cur); cur.clear(); }
+                    else cur += c;
+                }
+                out.push_back(cur);
+            };
+            if (isSep && paraOpen && para.spans.size() == 1
+                && para.spans[0].text.find(L'|') != std::wstring::npos) {
+                std::vector<std::wstring> head;
+                splitRow(para.spans[0].text, head);
+                if (!head.empty()) {
+                    paraOpen = false; para = Block();
+                    Block t; t.type = P_TABLE;
+                    t.cells.push_back(head);
+                    m_blocks.push_back(t);
+                    continue;
+                }
+            }
+            // 表格数据行：上一块是表格 → 追加一行
+            if (!m_blocks.empty() && m_blocks.back().type == P_TABLE && raw.find(L'|') != std::wstring::npos) {
+                std::vector<std::wstring> row;
+                splitRow(raw, row);
+                if (!row.empty()) { m_blocks.back().cells.push_back(row); continue; }
+            }
+        }
+
         // 分隔线 --- *** ___
         {
             bool allSame = raw.size() >= 3;
@@ -205,6 +264,46 @@ void MarkdownView::SetMarkdown(const std::wstring& src)
     closePara();
 }
 
+// 批次 E：加载本地图片 → ID2D1Bitmap（缓存；相对路径基于 m_basePath）
+ID2D1Bitmap* MarkdownView::LoadImage(Canvas& cv, const std::wstring& path) const
+{
+    auto it = m_imgs.find(path);
+    if (it != m_imgs.end()) return it->second.ok ? it->second.bmp.Get() : nullptr;
+
+    ImgEntry e;
+    // 解析路径：绝对路径直用；相对路径 join 基准目录
+    std::wstring p = path;
+    if (p.size() >= 2 && p[1] != L':' && p[0] != L'\\' && p[0] != L'/' && !m_basePath.empty())
+        p = m_basePath + (m_basePath.back() == L'\\' ? L"" : L"\\") + p;
+    // 网络地址等直接放弃
+    if (p.rfind(L"http://", 0) == 0 || p.rfind(L"https://", 0) == 0) {
+        m_imgs[path] = e;
+        return nullptr;
+    }
+
+    ComPtr<IWICImagingFactory> wic;
+    if (SUCCEEDED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
+                                   IID_PPV_ARGS(&wic)))) {
+        ComPtr<IWICBitmapDecoder> dec;
+        if (SUCCEEDED(wic->CreateDecoderFromFilename(p.c_str(), nullptr, GENERIC_READ,
+                                                     WICDecodeMetadataCacheOnLoad, &dec))) {
+            ComPtr<IWICBitmapFrameDecode> frame;
+            if (SUCCEEDED(dec->GetFrame(0, &frame))) {
+                UINT pw = 0, ph = 0;
+                if (SUCCEEDED(frame->GetSize(&pw, &ph)) && pw > 0 && ph > 0) {
+                    if (SUCCEEDED(cv.DC()->CreateBitmapFromWicBitmap(frame.Get(), nullptr, &e.bmp))) {
+                        e.w = (float)pw;
+                        e.h = (float)ph;
+                        e.ok = true;
+                    }
+                }
+            }
+        }
+    }
+    m_imgs[path] = e;
+    return e.ok ? e.bmp.Get() : nullptr;
+}
+
 // ---------------- 样式 ----------------
 TextStyle MarkdownView::StyleFor(const Block& b, const Span& s)
 {
@@ -253,6 +352,95 @@ float MarkdownView::Layout(float width, Canvas& cv)
             Line ln; ln.hr = true; ln.y = y + 6.0f; ln.h = 8.0f; ln.blockIdx = bi;
             m_lines.push_back(ln);
             y = ln.y + 8.0f + 10.0f;
+            continue;
+        }
+        // 批次 E：图片
+        if (b.type == P_IMG) {
+            void* bmp = LoadImage(cv, b.imgPath);
+            float iw = 0, ih = 0;
+            if (bmp) {
+                iw = m_imgs[b.imgPath].w;
+                ih = m_imgs[b.imgPath].h;
+            }
+            float maxW = width - 24.0f;
+            float dh = 90.0f, dw = maxW;   // 加载失败占位
+            if (bmp && iw > 1 && ih > 1) {
+                dw = (std::min)(maxW, iw);
+                dh = dw * (ih / iw);
+                if (dh > 520.0f) { dh = 520.0f; dw = dh * (iw / ih); }
+            }
+            y += 8.0f;
+            Line ln; ln.img = true; ln.imgPath = b.imgPath; ln.imgAlt = b.imgAlt;
+            ln.imgW = dw; ln.imgH = dh;
+            ln.y = y; ln.h = dh + (b.imgAlt.empty() ? 0.0f : 20.0f); ln.blockIdx = bi;
+            m_lines.push_back(ln);
+            y = ln.y + ln.h + 10.0f;
+            continue;
+        }
+        // 批次 E：表格（每逻辑行一个 Line；Paint 画网格与多行单元格）
+        if (b.type == P_TABLE && !b.cells.empty()) {
+            const size_t cols = (size_t)(std::max)(1,
+                (int)std::max_element(b.cells.begin(), b.cells.end(),
+                    [](const std::vector<std::wstring>& a, const std::vector<std::wstring>& c)
+                    { return a.size() < c.size(); })->size());
+            TextStyle cs; cs.size = 12.5f;
+            // 列宽：各列最大内容宽，总宽超出可用宽则等比压到可用宽（下限 64）
+            std::vector<float> colW(cols, 0.0f);
+            for (const auto& row : b.cells)
+                for (size_t c = 0; c < cols; ++c) {
+                    const std::wstring& txt = c < row.size() ? row[c] : L"";
+                    float w = cv.MeasureWidth(txt.empty() ? std::wstring(L"字") : txt, cs) + 16.0f;
+                    if (w > colW[c]) colW[c] = w;
+                }
+            float total = 0.0f;
+            for (float w : colW) total += w;
+            const float avail = width - 20.0f;
+            if (total > avail) {
+                float k = avail / total;
+                for (auto& w : colW) w = (std::max)(64.0f, w * k);
+                total = 0.0f;
+                for (float w : colW) total += w;
+            } else if (total < avail * 0.999f) {
+                // 窄表撑满可用宽（观感更整）
+                float k = avail / total;
+                for (auto& w : colW) w *= k;
+                total = avail;
+            }
+            std::vector<float> colX(cols + 1, 0.0f);
+            colX[0] = 10.0f;
+            for (size_t c = 0; c < cols; ++c) colX[c + 1] = colX[c] + colW[c];
+
+            y += 8.0f;
+            for (size_t r = 0; r < b.cells.size(); ++r) {
+                const auto& row = b.cells[r];
+                // 每格折行
+                std::vector<std::vector<std::wstring>> cellsWrap(cols);
+                int maxLines = 1;
+                for (size_t c = 0; c < cols; ++c) {
+                    const std::wstring& txt = c < row.size() ? row[c] : L"";
+                    float cw = colW[c] - 14.0f;
+                    std::wstring run;
+                    auto& out = cellsWrap[c];
+                    for (wchar_t ch : txt) {
+                        std::wstring one(1, ch);
+                        if (cv.MeasureWidth(run + one, cs) > cw && !run.empty()) {
+                            out.push_back(run); run.clear();
+                        }
+                        run += ch;
+                    }
+                    if (!run.empty() || out.empty()) out.push_back(run);
+                    if ((int)out.size() > maxLines) maxLines = (int)out.size();
+                }
+                Line ln; ln.table = true; ln.tableHead = (r == 0);
+                ln.tCells = std::move(cellsWrap);
+                ln.tColX = colX;
+                ln.tW = total;
+                ln.y = y; ln.h = (float)maxLines * 19.0f + 10.0f;
+                ln.blockIdx = bi;
+                m_lines.push_back(ln);
+                y += ln.h;
+            }
+            y += 12.0f;
             continue;
         }
         if (b.type == P_CODE) {
@@ -352,6 +540,56 @@ void MarkdownView::Paint(Canvas& cv, float x, float yTop, float cullTop, float c
 
         if (ln.hr) {
             cv.PerforationH(x + 2.0f, x + m_width - 2.0f, ay + 4.0f, WithAlpha(pal.ruleStrong, 0.6f));
+            continue;
+        }
+        // 批次 E：图片
+        if (ln.img) {
+            ID2D1Bitmap* bmp = LoadImage(cv, ln.imgPath);
+            if (bmp) {
+                cv.DrawBitmap(bmp,
+                              { x + 12.0f, ay, x + 12.0f + ln.imgW, ay + ln.imgH }, 1.0f);
+                cv.StrokeRoundRect({ x + 12.0f, ay, x + 12.0f + ln.imgW, ay + ln.imgH },
+                                   2.0f, WithAlpha(pal.rule, 0.8f), shape::kHair);
+            } else {
+                cv.FillRoundRect({ x + 12.0f, ay, x + 12.0f + ln.imgW, ay + ln.imgH },
+                                 4.0f, WithAlpha(pal.ink900, 0.05f));
+                TextStyle t; t.size = 12.0f; t.hAlign = HAlign::Center; t.vAlign = VAlign::Middle;
+                cv.Text(L"图片加载失败：" + ln.imgPath,
+                        { x + 12.0f, ay, x + 12.0f + ln.imgW, ay + ln.imgH }, t, pal.ink300);
+            }
+            if (!ln.imgAlt.empty()) {
+                TextStyle at; at.size = 11.0f; at.hAlign = HAlign::Center; at.vAlign = VAlign::Middle;
+                cv.Text(ln.imgAlt, { x + 12.0f, ay + ln.imgH, x + 12.0f + ln.imgW, ay + ln.h },
+                        at, pal.ink300);
+            }
+            continue;
+        }
+        // 批次 E：表格行（网格 + 多行单元格）
+        if (ln.table) {
+            // 背板（表头加深）
+            cv.FillRect({ x + ln.tColX.front(), ay, x + ln.tColX.front() + ln.tW, ay + ln.h },
+                        WithAlpha(pal.ink900, ln.tableHead ? 0.07f : 0.03f));
+            // 每格文本
+            TextStyle t; t.size = 12.5f; t.vAlign = VAlign::Top;
+            if (ln.tableHead) t.weight = DWRITE_FONT_WEIGHT_SEMI_BOLD;
+            size_t cols = ln.tColX.size() - 1;
+            for (size_t c = 0; c < cols; ++c) {
+                float cxx = x + ln.tColX[c] + 7.0f;
+                float cyy = ay + 5.0f;
+                if (c < ln.tCells.size())
+                    for (const auto& wl : ln.tCells[c]) {
+                        cv.Text(wl, { cxx, cyy, x + ln.tColX[c + 1] - 4.0f, cyy + 19.0f }, t, pal.ink900);
+                        cyy += 19.0f;
+                    }
+            }
+            // 网格：外框 + 列线 + 行底线
+            float x0 = x + ln.tColX.front(), x1 = x + ln.tColX.front() + ln.tW;
+            cv.StrokeRect({ x0, ay, x1, ay + ln.h }, WithAlpha(pal.ruleStrong, 0.8f), shape::kHair);
+            for (size_t c = 0; c <= cols; ++c)
+                if (c > 0 && c < cols)
+                    cv.Line(x + ln.tColX[c], ay, x + ln.tColX[c], ay + ln.h, WithAlpha(pal.rule, 0.7f), 1.0f);
+            if (!ln.tableHead)
+                cv.Line(x0, ay, x1, ay, WithAlpha(pal.ruleStrong, 0.5f), 1.0f);
             continue;
         }
         if (!ln.codeText.empty()) {

@@ -124,6 +124,7 @@ struct KCard
     std::wstring source;   // 来源说明（如「跨窗口拖入」）
     std::wstring tags;     // 标签（可空）
     long long    ts = 0;   // 收集时间（Unix 秒）
+    std::wstring basePath; // 批次 E：拖入文件所在目录（md 图片相对路径基准）
 };
 
 // ---------------- 模考报告（考场模式，落盘 accounts/<name>/exam_reports.json）----------------

@@ -162,6 +162,12 @@ void Canvas::StrokeCircle(float cx, float cy, float r, const D2D1_COLOR_F& c, fl
     if (auto* b = Brush(c)) m_dc->DrawEllipse(D2D1::Ellipse(D2D1::Point2F(cx, cy), r, r), b, w);
 }
 
+void Canvas::DrawBitmap(ID2D1Bitmap* bmp, const D2D1_RECT_F& dst, float opacity)
+{
+    if (bmp && m_dc && dst.right > dst.left && dst.bottom > dst.top)
+        m_dc->DrawBitmap(bmp, dst, opacity);
+}
+
 // ---------------- DOSSIER 母题 ----------------
 void Canvas::DoubleFrame(const D2D1_RECT_F& r, const D2D1_COLOR_F& c, float gap, float w)
 {

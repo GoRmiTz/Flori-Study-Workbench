@@ -54,7 +54,13 @@ void KnowledgeView::DebugForcePreview()
             L"> 引用：保持初心，方得始终。\n"
             L"---\n"
             L"```cpp\nint main() {\n    return 0;   // 代码块\n}\n```\n"
-            L"结尾段落：阅读视图由自研 MarkdownView 渲染，可切回源码对照。";
+            L"## 科目进度表\n"
+            L"| 科目 | 进度 | 目标 |\n"
+            L"|---|---|---|\n"
+            L"| 资料分析 | 80% | 90% |\n"
+            L"| 判断推理 | 65% | 85% |\n"
+            L"| 申论写作 | 40% | 75% |\n"
+            L"表格之后的收尾段落：阅读视图由自研 MarkdownView 渲染，可切回源码对照。";
         m_cards.push_back(c);
         // 不走 Reload()：它会重新 LoadKnowledge 覆盖示例卡；手动同步并行数组
         m_expanded.assign(m_cards.size(), true);
@@ -99,7 +105,10 @@ void KnowledgeView::SyncArrays()
     if (m_md.size() != n) {
         m_md.assign(n, {});
         for (size_t i = 0; i < n && i < m_cards.size(); ++i)
-            if (!m_cards[i].body.empty()) m_md[i].SetMarkdown(m_cards[i].body);
+            if (!m_cards[i].body.empty()) {
+                m_md[i].SetMarkdown(m_cards[i].body);
+                m_md[i].SetBasePath(m_cards[i].basePath);   // 批次 E：图片相对路径基准
+            }
     }
 }
 
@@ -117,6 +126,7 @@ void KnowledgeView::Layout(const D2D1_RECT_F& area, Canvas& cv)
     m_delRects.clear();
     m_expandRects.clear();
     m_mdToggleRects.clear();
+    m_renRects.clear();
 
     TextStyle bodyTs; bodyTs.size = 13.0f; bodyTs.role = FontRole::Sans;
 
@@ -126,8 +136,10 @@ void KnowledgeView::Layout(const D2D1_RECT_F& area, Canvas& cv)
         for (size_t i = 0; i < m_cards.size(); ++i) {
             float maxW = w - 32.0f - 170.0f;   // 右侧留给按钮
             // Markdown 阅读视图：首次展开前也预排版（Lazy——仅当卡内容非空）
-            if (m_md[i].Empty() && !m_cards[i].body.empty())
+            if (m_md[i].Empty() && !m_cards[i].body.empty()) {
                 m_md[i].SetMarkdown(m_cards[i].body);
+                m_md[i].SetBasePath(m_cards[i].basePath);   // 批次 E：图片相对路径基准
+            }
             float bodyH;
             if (m_expanded[i]) {
                 bodyH = (m_mdMode[i] && !m_md[i].Empty())
@@ -143,6 +155,9 @@ void KnowledgeView::Layout(const D2D1_RECT_F& area, Canvas& cv)
             m_delRects.push_back(ui::MakeRect(r.right - bw - 14.0f, r.top + 14.0f, bw, bh));
             m_expandRects.push_back(ui::MakeRect(r.right - 2.0f * bw - 24.0f, r.top + 14.0f, bw, bh));
             m_mdToggleRects.push_back(ui::MakeRect(r.right - 3.0f * bw - 34.0f, r.top + 14.0f, bw, bh));
+            // 批次 E：展开态「✎ 改名」按钮（重命名标题）
+            if (m_expanded[i])
+                m_renRects.push_back(ui::MakeRect(r.right - 4.0f * bw - 44.0f, r.top + 14.0f, bw, bh));
         }
     }
     SetContentHeight((v.bottom() - area.top) + 40.0f);
@@ -163,6 +178,16 @@ void KnowledgeView::Update(float dt, const Input& in)
     shifted.mouseY = in.mouseY + ScrollY();
     float mx = in.mouseX, my = shifted.mouseY;
 
+    // ---- 批次 E：标题重命名编辑（原地 FieldEdit）----
+    if (m_renActive && m_cv) {
+        TextStyle ts; ts.size = 15.0f; ts.role = FontRole::Sans; ts.weight = DWRITE_FONT_WEIGHT_BOLD;
+        if (m_renIdx >= 0 && m_renIdx < (int)m_cardRects.size()) {
+            D2D1_RECT_F box = RenBox(m_renIdx);
+            m_ren.HandleMouse(in, *m_cv, box, ts, 0.0f, 0.0f);
+            if (in.clicked && !InRect(box, mx, my)) { CommitRename(); }
+        }
+    }
+
     if (in.clicked) {
         for (size_t i = 0; i < m_cardRects.size(); ++i) {
             if (InRect(m_delRects[i], mx, my)) {
@@ -181,9 +206,64 @@ void KnowledgeView::Update(float dt, const Input& in)
                 RecomputeLayout();
                 return;
             }
+            // 批次 E：✎ 改名 → 标题行原地编辑
+            if (m_expanded[i] && i < m_renRects.size() && InRect(m_renRects[i], mx, my)) {
+                if (m_renActive && m_renIdx == (int)i) { CommitRename(); return; }
+                CommitRename();   // 收尾上一个
+                m_renIdx = (int)i;
+                m_ren.onEnter     = [this] { CommitRename(); };
+                m_ren.onKillFocus = [this] { CommitRename(); };
+                m_ren.Begin(m_cards[m_renIdx].title, false, 15.0f);
+                m_renActive = true;
+                return;
+            }
         }
     }
     View::Update(dt, in);
+}
+
+// 批次 E：重命名编辑框几何（覆盖标题行）
+D2D1_RECT_F KnowledgeView::RenBox(int idx) const
+{
+    D2D1_RECT_F r{};
+    if (idx < 0 || idx >= (int)m_cardRects.size()) return r;
+    const D2D1_RECT_F& cr = m_cardRects[idx];
+    float padL = cr.left + 16.0f;
+    float maxW = cr.right - 16.0f - 170.0f;
+    return { padL - 4.0f, cr.top + 12.0f, padL + maxW + 4.0f, cr.top + 42.0f };
+}
+
+// 批次 E：重命名提交（回车 / 失焦 / 点外）——写回 KCard.title 并落盘
+void KnowledgeView::CommitRename()
+{
+    if (!m_renActive) return;
+    std::wstring t;
+    m_ren.End(true, t);
+    m_renActive = false;
+    if (m_renIdx >= 0 && m_renIdx < (int)m_cards.size()) {
+        std::wstring nt = t;
+        while (!nt.empty() && (nt.front() == L' ' || nt.front() == L'\n')) nt.erase(nt.begin());
+        while (!nt.empty() && (nt.back() == L' ' || nt.back() == L'\n')) nt.pop_back();
+        m_cards[m_renIdx].title = nt;
+        CheckinStore::Instance().SaveKnowledge(m_cards);
+        Toast(nt.empty() ? L"已清空标题（显示正文首行）" : L"已重命名");
+    }
+    m_renIdx = -1;
+}
+
+// 批次 E：显示标题——title 为空时取正文第一行（# 去井号；普通首行截 48）
+std::wstring KnowledgeView::DispTitle(const KCard& c)
+{
+    if (!c.title.empty()) return c.title;
+    size_t b = 0;
+    while (b < c.body.size() && (c.body[b] == L'\n' || c.body[b] == L'\r' || c.body[b] == L' ')) ++b;
+    size_t e = c.body.find(L'\n', b);
+    std::wstring line = c.body.substr(b, (e == std::wstring::npos) ? std::wstring::npos : e - b);
+    while (!line.empty() && (line.front() == L' ' || line.front() == L'#')) line.erase(line.begin());
+    while (!line.empty() && line.back() == L' ') line.pop_back();
+    if (line.empty()) return L"未命名考点";
+    if (line.size() > 48) line = line.substr(0, 48) + L"…";
+    return line;
 }
 
 void KnowledgeView::Toast(const std::wstring& msg)
@@ -258,8 +338,17 @@ void KnowledgeView::PaintCard(Canvas& cv, const KCard& c, bool expanded,
     float padL = r.left + 16.0f;
     float maxW = r.right - 16.0f - 170.0f;
 
+    // 批次 E：标题（重命名编辑态由 FieldEdit 原地绘制；否则显示 DispTitle）
     TextStyle ts; ts.size = 15.0f; ts.role = FontRole::Sans; ts.weight = DWRITE_FONT_WEIGHT_BOLD;
-    cv.Text(c.title, { padL, r.top + 14.0f, padL + maxW, r.top + 40.0f }, ts, pal.ink900);
+    if (m_renActive && m_renIdx == idx) {
+        D2D1_RECT_F box = RenBox(idx);
+        cv.FillRoundRect(box, 4.0f, WithAlpha(pal.seal, 0.08f));
+        cv.StrokeRoundRect(box, 4.0f, WithAlpha(pal.seal, 0.8f), shape::kHair);
+        m_ren.Paint(cv, box, ts, pal.ink900, L"", pal.ink300, 0.0f, 0.0f);
+    } else {
+        cv.Text(DispTitle(c), { padL, r.top + 14.0f, padL + maxW, r.top + 40.0f }, ts,
+                c.title.empty() ? pal.ink500 : pal.ink900);
+    }
 
     TextStyle ms; ms.size = 11.0f; ms.role = FontRole::Sans;
     cv.Text(c.source + L" · " + FmtTime(c.ts),
@@ -282,9 +371,12 @@ void KnowledgeView::PaintCard(Canvas& cv, const KCard& c, bool expanded,
     cv.PopClip();
 
     PaintButton(cv, m_expandRects[idx], expanded ? L"收起" : L"展开", pal.paperDeep, pal.ink700);
-    if (expanded)
+    if (expanded) {
         PaintButton(cv, m_mdToggleRects[idx],
                     (m_mdMode[idx] ? L"源码" : L"阅读"), pal.paperDeep, pal.ink700);
+        if (idx < (int)m_renRects.size())
+            PaintButton(cv, m_renRects[idx], L"✎ 改名", pal.paperDeep, pal.ink700);
+    }
     PaintButton(cv, m_delRects[idx], L"删除", pal.vermWash, pal.vermilion);
 }
 

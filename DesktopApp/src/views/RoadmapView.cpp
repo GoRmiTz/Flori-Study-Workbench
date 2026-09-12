@@ -672,7 +672,9 @@ void RoadmapView::PaintEditorOverlay(Canvas& cv)
         TextStyle ts; ts.role = FontRole::Serif; ts.size = 17.0f;
         ts.weight = DWRITE_FONT_WEIGHT_BOLD; ts.vAlign = VAlign::Middle;
         if (m_titleActive) {
-            m_edTitle.Paint(cv, m_edTitleBox, ts, pal.ink900, L"未命名专栏", pal.ink300, 4.0f, 0.0f);
+            // 批次 D 追加：编辑态不显示占位字样（点击后「未命名专栏」立即消失，
+            // 空标题就是一个干净的输入光标），非编辑态空标题才显示灰字提示
+            m_edTitle.Paint(cv, m_edTitleBox, ts, pal.ink900, L"", pal.ink300, 4.0f, 0.0f);
         } else {
             lj::PaintFieldEdit(cv, m_edTitleBox, ts,
                               m_edTitleBuf.empty() ? std::wstring(L"未命名专栏") : m_edTitleBuf,
