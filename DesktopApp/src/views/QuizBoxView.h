@@ -1,11 +1,10 @@
 #pragma once
 // ============================================================
-//  QuizBoxView.h — 题集卡片盒（批次 G，需求 8）
-//  以「卡片 + 卡片盒」为灵感的题集收集页：
-//   · 盒架：自定义题盒（正常题盒 / 错题盒），可新建 / 改名 / 删除
-//   · 盒内：卡片列表（题面摘要 + 标签），可加卡 / 删卡
-//   · 抽卡：随机抽一张 → 正面题面 → 翻面看答案 → 下一张 / 放回
-//  数据落 accounts/<账户>/quiz_boxes.json（quiz/BoxStore）。
+//  QuizBoxView.h — 题集卡片盒 v2（批次 G2）
+//  三层结构：题集（房子）→ 题盒（盒子）→ 卡片（方块）。
+//  四态：题集架 / 盒架 / 盒内 / 抽卡 + 居中制卡弹窗。
+//  视图切换渐入、新建弹入、hover 浮起（T2 基础动效）。
+//  完整需求见 docs/题集卡片盒·开发文档.md。
 // ============================================================
 #include "ui/View.h"
 #include "ui/FieldEdit.h"
@@ -24,48 +23,69 @@ public:
     void Layout(const D2D1_RECT_F& area, Canvas& cv) override;
     void Update(float dt, const Input& in) override;
     void Paint(Canvas& cv) override;
-    void DebugForcePreview() override;   // 截图自检：空库造示例盒
+    void DebugForcePreview() override;   // 截图自检：题集架
+    void DebugForceOpen() override;     // 截图自检：盒内 + 制卡弹窗
 
 private:
-    enum V { V_SHELF = 0, V_BOX = 1, V_DRAW = 2 };
+    enum V { V_SETS = 0, V_BOXES = 1, V_BOX = 2, V_DRAW = 3 };
 
-    void Reload();
-    void DrawShelf(Canvas& cv, float s);
+    // 当前位置（三层导航）
+    int  m_view = V_SETS;
+    int  m_curSet = -1;          // 题集索引
+    int  m_curBox = -1;          // 盒索引（m_sets[m_curSet].boxes 内）
+    int  m_drawIdx = -1;         // 抽中卡索引
+    bool m_flip = false;
+
+    // 数据
+    std::vector<QuizSet> m_sets;
+
+    // ---- 绘制（各态）----
+    void DrawSets(Canvas& cv, float s);
+    void DrawBoxes(Canvas& cv, float s);
     void DrawBox(Canvas& cv, float s);
-    void DrawCard(Canvas& cv, float s);
+    void DrawDraw(Canvas& cv, float s);
+    void DrawCardEditor(Canvas& cv, float s);   // T3 制卡弹窗
+    void DrawHouse(Canvas& cv, const D2D1_RECT_F& r, const D2D1_COLOR_F& accent) const;
+    void DrawBoxIcon(Canvas& cv, const D2D1_RECT_F& r, const D2D1_COLOR_F& accent,
+                     bool wrong) const;
     void Toast(const std::wstring& msg);
 
-    std::vector<QuizBox> m_boxes;
-    int  m_view = V_SHELF;
-    int  m_curBox = -1;          // 盒内 / 抽卡态：当前盒索引
-    int  m_drawIdx = -1;         // 抽中卡索引
-    bool m_flip = false;         // 抽卡是否已翻面
+    // ---- 命中区（内容坐标，Layout/Paint/Update 共用）----
+    std::vector<D2D1_RECT_F> m_setRects, m_setDelRects;
+    D2D1_RECT_F m_newSetRect{};
+    std::vector<D2D1_RECT_F> m_boxRects, m_boxRenRects, m_boxDelRects;
+    D2D1_RECT_F m_newBoxRect{};
+    D2D1_RECT_F m_backRect{}, m_drawBtn{}, m_addBtn{};
+    std::vector<D2D1_RECT_F> m_cardRects, m_cardDelRects;
+    D2D1_RECT_F m_flipRect{}, m_nextRect{}, m_backDrawRect{};
 
-    // 命中区（内容坐标，Layout/Update/Paint 共用）
-    std::vector<D2D1_RECT_F> m_boxRects;     // 盒卡
-    std::vector<D2D1_RECT_F> m_boxRenRects;  // 盒「✎」
-    std::vector<D2D1_RECT_F> m_boxDelRects;  // 盒「✕」
-    D2D1_RECT_F m_newBoxRect{};              // 「＋ 新建题盒」
-    D2D1_RECT_F m_backRect{};                // 盒内「◀ 盒架」
-    D2D1_RECT_F m_drawBtn{};                 // 盒内「🎯 抽一张」
-    D2D1_RECT_F m_addBtn{};                  // 盒内「＋ 添加卡片」
-    std::vector<D2D1_RECT_F> m_cardDelRects; // 盒内卡「✕」
-    D2D1_RECT_F m_flipRect{};                // 抽卡「翻面」
-    D2D1_RECT_F m_nextRect{};                // 抽卡「下一张」
-    D2D1_RECT_F m_backDrawRect{};            // 抽卡「放回」
+    // ---- T3 制卡弹窗（居中卡片窗：题面/答案/标签/难度 1-5）----
+    FieldEdit m_edit;                // 制卡弹窗输入（front/back/tag 三段）
+    bool  m_ceOpen = false;
+    int   m_ceField = 0;              // 0=front 1=back 2=tag
+    int   m_ceDiff = 3;               // 难度
+    std::wstring m_ceFront, m_ceBack, m_ceTag;
+    std::wstring m_ceEditId;           // 非空 = 编辑既有卡
+    D2D1_RECT_F m_ceCard{}, m_ceFrontR{}, m_ceBackR{}, m_ceTagR{},
+                m_ceDiffR[5]{}, m_ceSaveR{}, m_ceSaveMoreR{}, m_ceCancelR{};
+    void OpenCardEditor(const QCard* edit);   // edit=null 新建
+    void CeCommit(bool keepOpen);
+    void CeCancel();
+    void CeNext();                    // 回车推进字段 / 最后字段保存
+    void CeSwitchField(int idx);     // 点击字段切换
 
-    // 新建卡内联编辑（题面 → 答案 → 标签 三段回车推进）
-    FieldEdit m_edit;
-    FieldEdit m_ren;             // 盒改名（就地 FieldEdit）
-    bool  m_addOpen = false;
-    int   m_addStage = 0;        // 0=front 1=back 2=tag
-    std::wstring m_addFront, m_addBack;
-    void AdvanceAdd();
-    bool InRectEbox(const D2D1_RECT_F& r, float x, float y) const;
-
-    // 盒改名（就地 FieldEdit）
+    // ---- 改名（题集 / 题盒共用一个 FieldEdit）----
+    FieldEdit m_ren;
     bool  m_renActive = false;
-    std::wstring m_renBuf;
+    int   m_renSet = -1, m_renBox = -1;   // 目标（-1 = 该层不适用）
+    D2D1_RECT_F m_renBox2{};              // 盒名就地编辑框
+
+    // ---- 动效（T2）----
+    float m_viewT = 1.0f;            // 视图切换计时（0→1，150ms 渐入：12px 上滑 + alpha）
+    float m_newT = 0.0f;             // 新建条目弹入计时
+    int   m_newHighlight = -1;      // 新建高亮下标（盒架/题集架）
+    int   m_hoverCard = -1;          // 盒内 hover 卡（浮起）
+
     D2D1_RECT_F m_area{};
     Canvas* m_cv = nullptr;
     float m_t = 0.0f;
