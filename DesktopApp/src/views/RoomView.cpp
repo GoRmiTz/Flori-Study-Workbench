@@ -96,6 +96,7 @@ void RoomView::OnEnter()
     // 供「当前时段 · 专注建议」与下一节匹配使用，不再显示旧默认计划。
     m_todayItems = ItemsForDate(CheckinStore::Instance().LoadItems(), Today());
     RecomputeStats();
+    ReloadFocusPrefs();   // 批次 C：focusItem / focusFullscreen（打卡页设置后进入即生效）
 
     // #71 专注白名单：与 FocusTracker 现行名单对齐（切换账户后名单随账户走）。
     // 播种默认清单只在 FocusTracker::Start() 里做一次；这里对未启用检测的
@@ -222,6 +223,8 @@ void RoomView::DebugForcePreview()
             m_history.push_back(s);
         }
     }
+    // 批次 C：模拟「打卡页固定了自定义专注项」（验证计时卡取消固定按钮）
+    m_focusItem = L"行测专项刷题";
 }
 
 // 截图自检：强制进入「专注中」（验证专注覆盖层 + 音乐控制条布局）
@@ -231,6 +234,7 @@ void RoomView::DebugForceOpen()
     m_remain = 15.0f * 60.0f;
     m_focusStart = (long long)std::time(nullptr);
     m_overlayA.Snap(1.0f);
+    m_focusFs = true;   // 批次 C：截图走全屏覆盖模式（渐显面板 / 顶部小圆角框）
     // 造两首示例曲目（不真正播放）让控制条显示出来
     if (MusicPlayer::Instance().Count() == 0) {
         std::vector<MusicPlayer::Track> demo = {
@@ -1033,6 +1037,22 @@ void RoomView::Update(float dt, const Input& in)
     m_overlayA.target = active ? 1.0f : 0.0f;
     m_overlayA.Update(dt);
 
+    // ---- 批次 C：全屏覆盖模式的鼠标静止检测 ----
+    // 移动 ≥0.5px 视为「动」，静止 2s 后渐显专注面板，移动时仅顶部小圆角框
+    if (active && m_focusFs) {
+        if (m_lastMx < 0.0f || m_lastMy < 0.0f ||
+            fabsf(in.mouseX - m_lastMx) > 0.5f || fabsf(in.mouseY - m_lastMy) > 0.5f) {
+            m_mouseIdle = 0.0f;
+            m_lastMx = in.mouseX; m_lastMy = in.mouseY;
+        } else {
+            m_mouseIdle += dt;
+        }
+    } else {
+        m_mouseIdle = 99.0f;   // 非全屏/非专注：面板常显
+    }
+    // 全屏模式下：面板可见（静止近 2s）才允许覆盖层控件响应
+    const bool overlayUiOn = !m_focusFs || m_mouseIdle >= 1.7f;
+
     if (m_timer == TimerState::Idle)        m_startBtn.label = L"开 始 专 注";
     else if (m_timer == TimerState::Running) m_startBtn.label = L"暂 停";
     else                                     m_startBtn.label = L"继 续 专 注";
@@ -1055,7 +1075,10 @@ void RoomView::Update(float dt, const Input& in)
     }
 
     if (active) {
-        UpdateWidgets(m_overlayWidgets, dt, in);   // 屏幕坐标
+        // 全屏覆盖且面板未显（鼠标刚动）→ 吃掉点击，不让误触暂停/取消
+        Input ovIn = in;
+        if (!overlayUiOn) { ovIn.clicked = ovIn.released = ovIn.pressed = false; }
+        UpdateWidgets(m_overlayWidgets, dt, ovIn);   // 屏幕坐标
         m_overInteractive = false;
         for (auto* w : m_overlayWidgets) if (w->Hovered()) m_overInteractive = true;
     } else {
@@ -1105,6 +1128,16 @@ void RoomView::Update(float dt, const Input& in)
         }
     }
 
+    // ---- 批次 C：「取消固定」当前专注项（恢复按当前时段自动建议）----
+    if (in.clicked && m_arrCancelR.right > m_arrCancelR.left) {
+        float sy = in.mouseY + ScrollY();
+        if (in.mouseX >= m_arrCancelR.left && in.mouseX <= m_arrCancelR.right &&
+            sy >= m_arrCancelR.top && sy <= m_arrCancelR.bottom) {
+            CancelFocusItem();
+            return;
+        }
+    }
+
     // ---- 专注记录「展开全部 / 收起」（内容坐标命中；Layout 每帧跑，翻转即重排）----
     if (in.clicked && m_histMoreR.right > m_histMoreR.left) {
         float sy = in.mouseY + ScrollY();
@@ -1116,7 +1149,8 @@ void RoomView::Update(float dt, const Input& in)
     }
 
     // ---- 批次 B：专注覆盖层音乐控制（音量 / 暂停 / 切歌）----
-    if (active && m_overlayA.value > 0.5f) {
+    // 批次 C：全屏覆盖时面板未渐显（鼠标刚动）不响应，防误触
+    if (active && m_overlayA.value > 0.5f && overlayUiOn) {
         // 音量条（屏幕坐标，覆盖层不随滚动）
         const auto& vr = m_ovVol;
         bool onVol = (vr.right > vr.left && in.mouseX >= vr.left && in.mouseX <= vr.right &&
@@ -1464,21 +1498,47 @@ void RoomView::PaintArrangement(Canvas& cv)
     float ix = m_timerCard.left + 26.0f;
     float right = m_timerCard.right - 26.0f;
 
+    bool custom = !m_focusItem.empty();
     TextStyle ls; ls.role = FontRole::Mono; ls.size = 10.5f; ls.letterSpacing = 2.0f;
     ls.weight = DWRITE_FONT_WEIGHT_BOLD;
-    cv.Text(L"当前时段 · 专注建议", { ix, m_arrY, right, m_arrY + 16.0f }, ls, pal.ink300);
-    cv.PerforationH(ix + 150.0f, right, m_arrY + 8.0f, WithAlpha(pal.ruleStrong, 0.5f));
+    cv.Text(custom ? L"当前专注项（自定义固定）" : L"当前时段 · 专注建议",
+            { ix, m_arrY, right, m_arrY + 16.0f }, ls, custom ? pal.seal : pal.ink300);
+    float perfX = ix + (custom ? 190.0f : 150.0f);
+    cv.PerforationH(perfX, right, m_arrY + 8.0f, WithAlpha(pal.ruleStrong, 0.5f));
 
     std::wstring arr = CurrentArrangement();
     TextStyle at; at.role = FontRole::Sans; at.size = 15.0f; at.weight = DWRITE_FONT_WEIGHT_SEMI_BOLD;
-    cv.Text(arr, { ix, m_arrY + 22.0f, right, m_arrY + 48.0f }, at, pal.ink900);
+    float arrTextR = right;
+    if (custom) {
+        // 「取消固定」小按钮：恢复按当前时段自动建议
+        m_arrCancelR = { right - 92.0f, m_arrY + 20.0f, right, m_arrY + 46.0f };
+        cv.StrokeRoundRect(m_arrCancelR, shape::kEdgeSoft, WithAlpha(pal.brass, 0.9f), shape::kHair);
+        TextStyle ct; ct.role = FontRole::Sans; ct.size = 11.0f;
+        ct.hAlign = HAlign::Center; ct.vAlign = VAlign::Middle;
+        cv.Text(L"取消固定", m_arrCancelR, ct, pal.brass);
+        arrTextR = m_arrCancelR.left - 10.0f;
+    } else {
+        m_arrCancelR = { 0, 0, 0, 0 };
+    }
+    cv.Text(arr, { ix, m_arrY + 22.0f, arrTextR, m_arrY + 48.0f }, at, pal.ink900);
 
     // 当前时段详情：时段（何时做）+ 完成标准（怎么做），一目了然
-    int idx = CurrentArrangementIndex();
+    int idx = -1;
+    if (custom) {
+        for (size_t i = 0; i < m_todayItems.size(); ++i)
+            if (m_todayItems[i].title == m_focusItem) { idx = (int)i; break; }
+    } else {
+        idx = CurrentArrangementIndex();
+    }
     if (idx >= 0 && (size_t)idx < m_todayItems.size()) {
         const auto& it = m_todayItems[idx];
         TextStyle dt; dt.role = FontRole::Sans; dt.size = 12.5f; dt.letterSpacing = 0.4f;
         cv.Text(L"时段 " + it.slot + L" · " + it.standard,
+                 { ix, m_arrY + 49.0f, right, m_arrY + 63.0f }, dt,
+                 WithAlpha(pal.ink500, 0.95f));
+    } else if (custom) {
+        TextStyle dt; dt.role = FontRole::Sans; dt.size = 12.5f;
+        cv.Text(L"来自打卡页的固定专注项（不在今日时段表中）",
                  { ix, m_arrY + 49.0f, right, m_arrY + 63.0f }, dt,
                  WithAlpha(pal.ink500, 0.95f));
     }
@@ -1732,6 +1792,30 @@ void RoomView::PaintFocusOverlay(Canvas& cv)
     float cx = (m_area.left + m_area.right) * 0.5f;
     float cy = m_area.top + (m_area.bottom - m_area.top) * 0.38f;
 
+    // ---- 批次 C：全屏覆盖模式 —— 鼠标静止 2s 渐显面板，移动时只留顶部小圆角框
+    float pa = m_focusFs ? Clamp01((m_mouseIdle - 1.6f) / 0.6f) : 1.0f;
+
+    if (m_focusFs && pa < 0.98f) {
+        // 顶部小圆角框：剩余时间 + 当前打卡项
+        int ttotal = (int)std::ceil(m_remain);
+        wchar_t tb[16];
+        swprintf_s(tb, L"%02d:%02d", ttotal / 60, ttotal % 60);
+        float pw = 360.0f, ph = 40.0f;
+        m_ovPill = { cx - pw * 0.5f, m_area.top + 16.0f, cx + pw * 0.5f, m_area.top + 16.0f + ph };
+        cv.PushOpacity(a * (1.0f - pa));
+        cv.FillRoundRect(m_ovPill, ph * 0.5f, pal.paperHi);
+        cv.StrokeRoundRect(m_ovPill, ph * 0.5f, pal.rule, shape::kHair);
+        TextStyle pt; pt.role = FontRole::Sans; pt.size = 13.0f;
+        pt.hAlign = HAlign::Center; pt.vAlign = VAlign::Middle;
+        cv.Text(std::wstring(tb) + L"  ·  " + CurrentArrangement(), m_ovPill, pt, pal.ink900);
+        cv.PopOpacity();
+    } else {
+        m_ovPill = {};
+    }
+
+    if (pa > 0.004f) {
+    cv.PushOpacity(pa);
+
     TextStyle st; st.role = FontRole::Mono; st.size = 12.0f; st.letterSpacing = 3.0f; st.hAlign = HAlign::Center;
     cv.Text(m_timer == TimerState::Paused ? L"已 暂 停 · 专 注 中" : L"专 注 中 · 界 面 已 静 默",
             { m_area.left, cy - 150.0f, m_area.right, cy - 126.0f }, st, pal.seal);
@@ -1832,6 +1916,9 @@ void RoomView::PaintFocusOverlay(Canvas& cv)
         } else {
             m_ovPrev = m_ovPlay = m_ovNext = m_ovVol = { 0, 0, 0, 0 };
         }
+    }
+
+    cv.PopOpacity();   // pa（全屏模式面板渐显）
     }
 
     cv.PopOpacity();
@@ -2128,9 +2215,29 @@ int RoomView::CurrentArrangementIndex() const
 
 std::wstring RoomView::CurrentArrangement() const
 {
+    // 批次 C：打卡页固定的自定义专注项优先
+    if (!m_focusItem.empty()) return m_focusItem;
     int idx = CurrentArrangementIndex();
     if (idx >= 0 && (size_t)idx < m_todayItems.size()) return m_todayItems[idx].title;
     return L"自习";
+}
+
+// 批次 C：从 settings 读取自定义专注项与全屏覆盖开关（OnEnter / 取消后调用）
+void RoomView::ReloadFocusPrefs()
+{
+    AppSettings s = CheckinStore::Instance().LoadSettings();
+    m_focusItem = s.focusItem;
+    m_focusFs   = s.focusFullscreen;
+}
+
+// 批次 C：取消自定义专注项 → 恢复「当前时段」自动建议
+void RoomView::CancelFocusItem()
+{
+    m_focusItem.clear();
+    auto s = CheckinStore::Instance().LoadSettings();
+    s.focusItem.clear();
+    CheckinStore::Instance().SaveSettings(s);
+    ShowToast(L"已取消固定，恢复按当前时段自动建议");
 }
 
 std::wstring RoomView::FmtClock(long long epoch)

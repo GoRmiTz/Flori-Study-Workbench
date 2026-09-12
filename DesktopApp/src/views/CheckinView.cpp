@@ -386,9 +386,26 @@ void CheckinView::Update(float dt, const Input& in)
             auto& r = m_rows[i];
             if (!r.visible) continue;
             if (!r.rest && Hit(r.detailRect, mx, my)) { openTaskCard(m_items[i]); break; }
-            if (Hit(r.bounds, mx, my)) { toggleRow((int)i); break; }
+            if (!r.rest && r.CheckRect().right > 0 &&
+                mx >= r.bounds.left && mx <= r.bounds.right &&
+                my >= r.bounds.top && my <= r.bounds.bottom) {
+                if (mx <= r.CheckRect().right) { toggleRow((int)i); }   // 勾选框 = 打卡
+                else { SetFocusItem(m_items[i]); }                      // 框外 = 设为当前专注项
+                break;
+            }
+            if (r.rest && Hit(r.bounds, mx, my)) { toggleRow((int)i); break; }
         }
     }
+}
+
+// 批次 C：把打卡项设为自习室「当前专注项」（落盘 settings.focusItem，
+// 自习室内可取消恢复时段建议）
+void CheckinView::SetFocusItem(const CheckItem& it)
+{
+    auto s = CheckinStore::Instance().LoadSettings();
+    s.focusItem = it.title;
+    CheckinStore::Instance().SaveSettings(s);
+    ShowSuccess(L"已设为当前专注项 · 开始专注将围绕「" + it.title + L"」，自习室内可取消");
 }
 
 void CheckinView::Paint(Canvas& cv)

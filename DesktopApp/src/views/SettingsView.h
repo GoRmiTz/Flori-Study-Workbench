@@ -90,6 +90,7 @@ private:
 
     // 通用
     bool        m_dark = false, m_reviewNudge = true;
+    bool        m_focusFs = false;             // 专注时全屏覆盖（批次 C）
     int         m_reviewHour = 21;
     int         m_exitAction = 0;              // 关闭按钮行为：0 询问 / 1 退出 / 2 托盘
     std::wstring m_focusApps;                  // 逗号分隔

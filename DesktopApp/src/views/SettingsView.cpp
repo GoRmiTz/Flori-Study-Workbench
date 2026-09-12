@@ -83,6 +83,7 @@ void SettingsView::Load()
     AppSettings s = CheckinStore::Instance().LoadSettings();
     m_dark = s.dark;
     m_reviewNudge = s.reviewNudge;
+    m_focusFs = s.focusFullscreen;
     m_reviewHour = ((s.reviewNudgeHour % 24) + 24) % 24;
     m_exitAction = (s.exitAction >= 0 && s.exitAction <= 2) ? s.exitAction : 0;
     m_focusApps.clear();
@@ -141,6 +142,7 @@ void SettingsView::Apply()
     AppSettings s = CheckinStore::Instance().LoadSettings();
     s.dark = m_dark;
     s.reviewNudge = m_reviewNudge;
+    s.focusFullscreen = m_focusFs;
     s.reviewNudgeHour = m_reviewHour;
     s.exitAction = (m_exitAction >= 0 && m_exitAction <= 2) ? m_exitAction : 0;
 
@@ -183,6 +185,7 @@ void SettingsView::BuildRows()
     // —— 0 通用 ——
     m_rows.push_back(SRow{ .type = SRow::Toggle, .label = L"暗色主题（夜间档案室）", .pBool = &m_dark, .sec = 0 });
     m_rows.push_back(SRow{ .type = SRow::Toggle, .label = L"每日复盘提醒", .pBool = &m_reviewNudge, .sec = 0 });
+    m_rows.push_back(SRow{ .type = SRow::Toggle, .label = L"专注时全屏覆盖（鼠标静止 2 秒渐显信息）", .pBool = &m_focusFs, .sec = 0 });
     m_rows.push_back(SRow{ .type = SRow::Stepper, .label = L"提醒时刻", .pInt = &m_reviewHour,
                            .step = 1, .minv = 0, .maxv = 23, .unit = L"时", .sec = 0 });
     m_rows.push_back(SRow{ .type = SRow::Stepper, .label = L"点关闭按钮时", .pInt = &m_exitAction,

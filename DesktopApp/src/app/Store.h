@@ -63,6 +63,13 @@ struct AppSettings
     // 用户选择的本地音乐文件夹；空 = 回退 assets/media/music 与系统「音乐」库。
     std::wstring musicDir;
 
+    // ---- 专注体系（批次 C）----
+    // 自定义当前专注项（打卡页点打卡项设置）；空 = 按「当前时段」自动建议。
+    std::wstring focusItem;
+    // 开始专注时覆盖层是否全屏（false = 只盖自习室内容区）。
+    // 全屏模式：鼠标静止 2s 渐显专注信息，移动时仅顶部小圆角框。
+    bool focusFullscreen = false;
+
     // ---- 关闭按钮行为 ----
     // 0 = 每次询问（弹自绘确认层）1 = 直接退出 2 = 最小化到托盘
     int exitAction = 0;

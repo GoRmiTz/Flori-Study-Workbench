@@ -31,6 +31,10 @@ public:
 
     D2D1_RECT_F detailRect{};  // 「详情」按钮命中区（Layout 赋值，Paint 同位置绘制）
 
+    // 勾选框命中区（行左端）：勾选框内点击 = 打卡；框外点击 = 设为当前专注项（批次 C）
+    D2D1_RECT_F CheckRect() const
+    { return { bounds.left, bounds.top, bounds.left + 56.0f, bounds.bottom }; }
+
     void Paint(Canvas& cv) override;
 };
 
@@ -87,6 +91,7 @@ private:
     void LogFocusNow();
     void ShowSuccess(const std::wstring& msg);
     void openTaskCard(const CheckItem& it);
+    void SetFocusItem(const CheckItem& it);   // 批次 C：勾选框外点击 → 设为当前专注项
 
     std::vector<CheckRow>   m_rows;
     std::vector<CheckItem>  m_items;     // 当日生效列表（与 m_rows 平行）

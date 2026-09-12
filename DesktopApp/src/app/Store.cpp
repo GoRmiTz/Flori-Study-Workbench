@@ -411,6 +411,9 @@ AppSettings CheckinStore::LoadSettings()
     if (s.exitAction < 0 || s.exitAction > 2) s.exitAction = 0;
     // 本地音乐文件夹（批次 B）
     if (auto* md = JGet(v, "musicDir")) s.musicDir = U2W(md->str);
+    // 专注体系（批次 C）
+    if (auto* fi = JGet(v, "focusItem"))       s.focusItem = U2W(fi->str);
+    if (auto* ff = JGet(v, "focusFullscreen")) s.focusFullscreen = (ff->num != 0);
 
     return s;
 }
@@ -454,7 +457,10 @@ void CheckinStore::SaveSettings(const AppSettings& s)
     // 关闭按钮行为（0 询问 / 1 退出 / 2 托盘）
     out += "  \"exitAction\": " + std::to_string(s.exitAction) + ",\n";
     // 本地音乐文件夹（批次 B）
-    out += "  \"musicDir\": " + JQuote(W2U(s.musicDir)) + "\n";
+    out += "  \"musicDir\": " + JQuote(W2U(s.musicDir)) + ",\n";
+    // 专注体系（批次 C）
+    out += "  \"focusItem\": " + JQuote(W2U(s.focusItem)) + ",\n";
+    out += "  \"focusFullscreen\": " + std::string(s.focusFullscreen ? "1" : "0") + "\n";
     out += "}\n";
     WriteFileRaw(SettingsFilePath(), out);
     Cloud::Instance().MarkDirty();   // 写盘即打脏：后台线程防抖后静默上推
