@@ -51,6 +51,8 @@ public:
     void DashedLine(float x1, float y1, float x2, float y2, const D2D1_COLOR_F& c, float w = shape::kHair);
     void FillCircle(float cx, float cy, float r, const D2D1_COLOR_F& c);
     void StrokeCircle(float cx, float cy, float r, const D2D1_COLOR_F& c, float w = shape::kHair);
+    // G5 星云：椭圆描边（轨道线；俯视透视轨道）
+    void StrokeEllipse(float cx, float cy, float rx, float ry, const D2D1_COLOR_F& c, float w = 1.0f);
     // 批次 E：绘制 D2D 位图（Markdown 图片；透明度 0..1）
     void DrawBitmap(ID2D1Bitmap* bmp, const D2D1_RECT_F& dst, float opacity = 1.0f);
 

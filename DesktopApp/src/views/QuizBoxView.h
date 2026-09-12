@@ -27,7 +27,7 @@ public:
     void DebugForceOpen() override;     // 截图自检：盒内 + 制卡弹窗
 
 private:
-    enum V { V_SETS = 0, V_BOXES = 1, V_BOX = 2, V_DRAW = 3 };
+    enum V { V_SETS = 0, V_BOXES = 1, V_BOX = 2, V_DRAW = 3, V_NEBULA = 4 };
 
     // 当前位置（三层导航）
     int  m_view = V_SETS;
@@ -55,6 +55,7 @@ private:
     D2D1_RECT_F m_newSetRect{};
     std::vector<D2D1_RECT_F> m_boxRects, m_boxRenRects, m_boxDelRects;
     D2D1_RECT_F m_newBoxRect{};
+    D2D1_RECT_F m_nebBtn{};           // G5：盒架「🌌 星云」入口
     D2D1_RECT_F m_backRect{}, m_drawBtn{}, m_addBtn{};
     std::vector<D2D1_RECT_F> m_cardRects, m_cardDelRects;
     D2D1_RECT_F m_flipRect{}, m_nextRect{}, m_backDrawRect{};
@@ -103,6 +104,20 @@ private:
     D2D1_RECT_F m_movePanel{};
     void StartDraw();                 // 抽一张（重置弹卡动画）
     float CardHeat(const QCard& c) const;   // 红警示 0..1
+
+    // ---- G5：T8 卡片星云（轨道模型 + 伪 3D + 难度高亮）----
+    struct NebCard {
+        int boxIdx = -1, cardIdx = -1;
+        D2D1_POINT_2F pos{};
+        float z = 0.0f;             // 深度 -1（远）..1（近）
+        float scale = 1.0f, alpha = 1.0f;
+        D2D1_RECT_F rect{};          // 屏幕坐标（含缩放后尺寸）
+    };
+    std::vector<NebCard> m_nebCards;  // 每帧由 Paint 重建
+    float m_orbit = 0.0f;             // 公转角（慢速漂移）
+    int   m_hoverNeb = -1;           // hover 小卡（同步高亮同难度）
+    D2D1_RECT_F m_nebBackRect{};
+    void DrawNebula(Canvas& cv, float s);
 
     D2D1_RECT_F m_area{};
     Canvas* m_cv = nullptr;

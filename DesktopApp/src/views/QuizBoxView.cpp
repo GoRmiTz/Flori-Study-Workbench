@@ -210,9 +210,14 @@ void QuizBoxView::DrawBoxes(Canvas& cv, float s)
     bt.hAlign = HAlign::Center; bt.vAlign = VAlign::Middle;
     cv.Text(L"🏠 题集架", m_backRect, bt, pal.ink700);
 
+    // G5：星云入口（当前题集全部卡片轨道视图）
+    m_nebBtn = { x0 + contentW - 170.0f, y0, x0 + contentW, y0 + 38.0f };
+    cv.FillRoundRect(m_nebBtn, 6.0f, pal.jade);
+    cv.Text(L"🌌 卡片星云", m_nebBtn, bt, pal.paperHi);
+
     TextStyle h1; h1.role = FontRole::Serif; h1.size = 28.0f;
     h1.weight = DWRITE_FONT_WEIGHT_BLACK; h1.letterSpacing = 2.0f; h1.vAlign = VAlign::Middle;
-    cv.Text(st.name, { x0 + 170.0f, y0 - 2.0f, x0 + contentW, y0 + 38.0f }, h1, pal.ink900);
+    cv.Text(st.name, { x0 + 170.0f, y0 - 2.0f, x0 + contentW - 190.0f, y0 + 38.0f }, h1, pal.ink900);
     cv.PerforationH(x0, x0 + contentW, y0 + 62.0f, WithAlpha(pal.ruleStrong, 0.5f));
 
     m_boxRects.clear(); m_boxRenRects.clear(); m_boxDelRects.clear();
@@ -451,9 +456,190 @@ void QuizBoxView::DrawBox(Canvas& cv, float s)
 }
 
 // ============================================================
-//  抽卡（V_DRAW）—— G3 T5：盒子特写 + 盖子打开 + 卡片弹出 +
-//  翻面（rotateY 模拟）+ 记住/答错反馈（T10 闭环）
+//  G5 T8：卡片星云 —— 轨道模型（盒=轨道 绕 题集中心点公转）+
+//  难度颜色 + hover 同难度高亮 + D2D 伪 3D（近大远小 + 深度排序）
 // ============================================================
+void QuizBoxView::DrawNebula(Canvas& cv, float s)
+{
+    if (m_curSet < 0 || m_curSet >= (int)m_sets.size()) { m_view = V_SETS; return; }
+    const auto& pal = cv.Pal();
+    const auto& st = m_sets[m_curSet];
+
+    float va = ViewAlpha(m_viewT);
+    cv.PushOpacity(va);
+
+    // 顶部：返回 + 题集名
+    float availW = m_area.right - m_area.left;
+    float contentW = (std::min)(shape::kMaxWidth, availW - 72.0f);
+    float x0 = m_area.left + (availW - contentW) * 0.5f;
+    float y0 = m_area.top + 20.0f;
+    m_nebBackRect = { x0, y0, x0 + 150.0f, y0 + 38.0f };
+    cv.FillRoundRect(m_nebBackRect, 6.0f, pal.paperLo);
+    cv.StrokeRoundRect(m_nebBackRect, 6.0f, pal.rule, shape::kHair);
+    TextStyle bt; bt.size = 12.5f; bt.role = FontRole::Sans;
+    bt.hAlign = HAlign::Center; bt.vAlign = VAlign::Middle;
+    cv.Text(L"📦 盒架", m_nebBackRect, bt, pal.ink700);
+    TextStyle hs; hs.role = FontRole::Mono; hs.size = 11.0f; hs.letterSpacing = 2.0f;
+    hs.weight = DWRITE_FONT_WEIGHT_BOLD; hs.vAlign = VAlign::Middle; hs.hAlign = HAlign::Center;
+    int totalCards = 0;
+    for (auto& b : st.boxes) totalCards += (int)b.cards.size();
+    wchar_t tb[64];
+    swprintf_s(tb, L"星云 · %s · %d 盒 %d 卡", st.name.c_str(), (int)st.boxes.size(), totalCards);
+    cv.Text(tb, { x0, y0, x0 + contentW, y0 + 38.0f }, hs, pal.seal);
+
+    // ---- 中心点（题集 = 房子）----
+    float cx = (m_area.left + m_area.right) * 0.5f;
+    float cy = (m_area.top + m_area.bottom) * 0.52f;
+    DrawHouse(cv, { cx - 34.0f, cy - 44.0f, cx + 34.0f, cy + 30.0f }, pal.seal);
+    TextStyle sn; sn.role = FontRole::Serif; sn.size = 14.0f;
+    sn.weight = DWRITE_FONT_WEIGHT_BOLD; sn.hAlign = HAlign::Center; sn.vAlign = VAlign::Top;
+    cv.Text(st.name, { cx - 100.0f, cy + 36.0f, cx + 100.0f, cy + 60.0f }, sn, pal.ink900);
+
+    // ---- 轨道 + 卡片（伪 3D：椭圆透视 + 深度排序）----
+    auto diffColor = [&](int d) -> D2D1_COLOR_F {
+        switch (d) {
+        case 1: case 2: return pal.jade;
+        case 3: return pal.brass;
+        case 4: return pal.seal;
+        default: return pal.vermilion;
+        }
+    };
+
+    // hover 卡所在难度（用于同步高亮）
+    int hoverDiff = -1, hoverBox = -1;
+    if (m_hoverNeb >= 0 && m_hoverNeb < (int)m_nebCards.size()) {
+        const auto& nc = m_nebCards[m_hoverNeb];
+        if (nc.boxIdx >= 0 && nc.boxIdx < (int)st.boxes.size()) {
+            const auto& b2 = st.boxes[nc.boxIdx];
+            if (nc.cardIdx >= 0 && nc.cardIdx < (int)b2.cards.size()) {
+                hoverDiff = b2.cards[nc.cardIdx].difficulty;
+                hoverBox = nc.boxIdx;
+            }
+        }
+    }
+
+    m_nebCards.clear();
+    int nb = (int)st.boxes.size();
+    for (int bi = 0; bi < nb; ++bi) {
+        const auto& b = st.boxes[bi];
+        // 轨道半径：依盒序号外扩；俯视透视 ry = rx * 0.30
+        float rx = 150.0f + bi * 66.0f;
+        float ry = rx * 0.30f;
+        // 轨道线（细椭圆；hover 所在轨道加亮）
+        bool laneHot = (hoverBox == bi);
+        cv.StrokeEllipse(cx, cy, rx, ry,
+                          WithAlpha(pal.rule, laneHot ? 0.9f : 0.45f), 1.0f);
+        // 轨道标签（最右端旁）
+        TextStyle lt; lt.size = 10.5f; lt.role = FontRole::Mono; lt.vAlign = VAlign::Middle;
+        cv.Text(b.name + (b.kind == 1 ? L" ✕" : L""), { cx + rx + 8.0f, cy - 9.0f, cx + rx + 130.0f, cy + 9.0f },
+                lt, laneHot ? pal.seal : pal.ink500);
+
+        // 卡片沿轨道分布（均分 + 公转）
+        int n = (int)b.cards.size();
+        for (int ci = 0; ci < n; ++ci) {
+            float ang = m_orbit + (float)ci / (float)n * 6.2831853f;
+            float px = cx + std::cos(ang) * rx;
+            float py = cy + std::sin(ang) * ry;
+            float z = std::sin(ang);                 // 下半（屏幕向下）= 近
+            float scale = 0.78f + (z + 1.0f) * 0.22f;  // 0.78 .. 1.22
+            float alpha = 0.5f + (z + 1.0f) * 0.25f;   // 0.5 .. 1.0
+            NebCard nc;
+            nc.boxIdx = bi; nc.cardIdx = ci;
+            nc.pos = { px, py };
+            nc.z = z; nc.scale = scale; nc.alpha = alpha;
+            float w = 16.0f * scale, h = 20.0f * scale;
+            nc.rect = { px - w * 0.5f, py - h * 0.5f, px + w * 0.5f, py + h * 0.5f };
+            m_nebCards.push_back(nc);
+        }
+    }
+
+    // 深度排序（远 → 近绘制）
+    std::vector<int> order(m_nebCards.size());
+    for (size_t i = 0; i < order.size(); ++i) order[i] = (int)i;
+    std::sort(order.begin(), order.end(), [&](int a, int b2) {
+        return m_nebCards[a].z < m_nebCards[b2].z;
+    });
+
+    for (int idx : order) {
+        const auto& nc = m_nebCards[idx];
+        if (nc.boxIdx >= (int)st.boxes.size()) continue;
+        const auto& b2 = st.boxes[nc.boxIdx];
+        if (nc.cardIdx >= (int)b2.cards.size()) continue;
+        const auto& cd = b2.cards[nc.cardIdx];
+
+        D2D1_COLOR_F dc2 = diffColor(cd.difficulty);
+        float heat = CardHeat(cd);
+        if (heat > 0.05f) {
+            dc2.r = dc2.r + (pal.vermilion.r - dc2.r) * heat;
+            dc2.g = dc2.g + (pal.vermilion.g - dc2.g) * heat;
+            dc2.b = dc2.b + (pal.vermilion.b - dc2.b) * heat;
+        }
+
+        // hover 同难度高亮；其他压暗
+        bool lit = (hoverDiff == cd.difficulty);
+        bool self = (m_hoverNeb == idx);
+        float a = nc.alpha * (hoverDiff >= 0 ? (lit ? 1.0f : 0.18f) : 1.0f);
+        float sc = self ? 1.35f : 1.0f;    // hover 自身再放大
+
+        float w = (nc.rect.right - nc.rect.left) * sc;
+        float h = (nc.rect.bottom - nc.rect.top) * sc;
+        D2D1_RECT_F r{ nc.pos.x - w * 0.5f, nc.pos.y - h * 0.5f,
+                       nc.pos.x + w * 0.5f, nc.pos.y + h * 0.5f };
+        cv.PushOpacity(a);
+        // 卡片小方块：难度色边框 + 淡填充 + 高光（lit 时）
+        cv.FillRoundRect(r, 2.5f, WithAlpha(dc2, lit ? 0.38f : 0.20f));
+        cv.StrokeRoundRect(r, 2.5f, WithAlpha(dc2, lit ? 1.0f : 0.75f), 1.2f);
+        if (lit) {
+            // 光晕（双层描边模拟）
+            cv.StrokeRoundRect({ r.left - 3.0f, r.top - 3.0f, r.right + 3.0f, r.bottom + 3.0f },
+                               3.5f, WithAlpha(dc2, 0.35f), 1.0f);
+        }
+        if (heat > 0.5f) {
+            // 警示微标（小 ✕ 点）
+            cv.FillCircle(nc.pos.x, r.top - 2.0f, 2.6f, pal.vermilion);
+        }
+        cv.PopOpacity();
+
+        // 命中矩形更新为缩放后尺寸（供 Update hover）
+        m_nebCards[idx].rect = r;
+    }
+
+    // ---- hover tooltip（题面摘要 + 盒名 + 难度）----
+    if (m_hoverNeb >= 0 && m_hoverNeb < (int)m_nebCards.size()) {
+        const auto& nc = m_nebCards[m_hoverNeb];
+        if (nc.boxIdx < (int)st.boxes.size()) {
+            const auto& b2 = st.boxes[nc.boxIdx];
+            if (nc.cardIdx < (int)b2.cards.size()) {
+                const auto& cd = b2.cards[nc.cardIdx];
+                float tw = 280.0f, th = 92.0f;
+                float tx = nc.pos.x + 20.0f;
+                if (tx + tw > m_area.right - 12.0f) tx = nc.pos.x - tw - 20.0f;
+                float ty = nc.pos.y - th * 0.5f;
+                if (ty < m_area.top + 50.0f) ty = m_area.top + 50.0f;
+                D2D1_RECT_F tip{ tx, ty, tx + tw, ty + th };
+                cv.FillRoundRect(tip, 6.0f, pal.paperHi);
+                cv.StrokeRoundRect(tip, 6.0f, WithAlpha(diffColor(cd.difficulty), 0.9f), shape::kHair);
+                TextStyle t1; t1.size = 12.5f; t1.role = FontRole::Sans;
+                t1.weight = DWRITE_FONT_WEIGHT_SEMI_BOLD;
+                std::wstring fr = cd.front;
+                if (fr.size() > 24) fr = fr.substr(0, 24) + L"…";
+                cv.Text(fr, { tip.left + 12.0f, tip.top + 8.0f, tip.right - 12.0f, tip.top + 30.0f }, t1, pal.ink900);
+                TextStyle t2; t2.size = 10.5f; t2.role = FontRole::Mono;
+                wchar_t lb[80];
+                swprintf_s(lb, L"%s · 难度 D%d · 错 %d 次", b2.name.c_str(), cd.difficulty, cd.wrongCount);
+                cv.Text(lb, { tip.left + 12.0f, tip.top + 34.0f, tip.right - 12.0f, tip.top + 52.0f }, t2, pal.ink500);
+                if (!cd.tag.empty())
+                    cv.Text(L"#" + cd.tag, { tip.left + 12.0f, tip.top + 56.0f, tip.right - 12.0f, tip.top + 74.0f },
+                            t2, pal.jade);
+                TextStyle t3; t3.size = 9.5f; t3.role = FontRole::Mono;
+                cv.Text(L"点击进入抽卡", { tip.left + 12.0f, tip.bottom - 22.0f, tip.right - 12.0f, tip.bottom - 6.0f },
+                        t3, pal.ink300);
+            }
+        }
+    }
+
+    cv.PopOpacity();
+}
 void QuizBoxView::StartDraw()
 {
     if (m_curSet < 0 || m_curSet >= (int)m_sets.size()) return;
@@ -936,9 +1122,47 @@ void QuizBoxView::Update(float dt, const Input& in)
     }
 
     if (in.keyDown[VK_ESCAPE]) {
-        if (m_view == V_DRAW) { m_view = V_BOX; m_viewT = 0.0f; }
+        if (m_view == V_NEBULA) { m_view = V_BOXES; m_viewT = 0.0f; }
+        else if (m_view == V_DRAW) { m_view = V_BOX; m_viewT = 0.0f; }
         else if (m_view == V_BOX) { m_view = V_BOXES; m_viewT = 0.0f; }
         else if (m_view == V_BOXES) { m_view = V_SETS; m_viewT = 0.0f; }
+    }
+
+    // ---- G5：星云交互（公转漂移 + hover 同难度高亮 + 点击进抽卡）----
+    if (m_view == V_NEBULA) {
+        // 公转：hover 时暂停（便于点击），平时慢速漂移
+        if (m_hoverNeb < 0) m_orbit += dt * 0.10f;
+        // hover 检测（星云不滚动，直接用屏幕坐标）
+        m_hoverNeb = -1;
+        for (size_t i = 0; i < m_nebCards.size(); ++i) {
+            const auto& r = m_nebCards[i].rect;
+            if (in.mouseX >= r.left - 4.0f && in.mouseX <= r.right + 4.0f &&
+                in.mouseY >= r.top - 6.0f && in.mouseY <= r.bottom + 6.0f) {
+                m_hoverNeb = (int)i;
+                m_overInteractive = true;
+                break;
+            }
+        }
+        if (in.clicked) {
+            if (InRect(m_nebBackRect, mx, my)) { m_view = V_BOXES; m_viewT = 0.0f; return; }
+            // 点中小卡 → 进入该卡抽卡（G6 再扩展拖拽）
+            if (m_hoverNeb >= 0 && m_hoverNeb < (int)m_nebCards.size()) {
+                const auto& nc = m_nebCards[m_hoverNeb];
+                if (nc.boxIdx >= 0 && nc.boxIdx < (int)m_sets[m_curSet].boxes.size()) {
+                    m_curBox = nc.boxIdx;
+                    m_drawIdx = nc.cardIdx;
+                    m_flip = false;
+                    m_flipT = 1.0f;
+                    m_popT = 0.0f;
+                    m_view = V_DRAW;
+                    m_viewT = 0.0f;
+                    return;
+                }
+            }
+            // 点空白处轻推公转（探索感）
+            m_orbit += 0.35f;
+        }
+        return;   // 星云独占（不走列表逻辑）
     }
 
     // hover（盒内卡片浮起）
@@ -1031,6 +1255,12 @@ void QuizBoxView::Update(float dt, const Input& in)
         if (m_curSet < 0 || m_curSet >= (int)m_sets.size()) { m_view = V_SETS; return; }
         const auto& st = m_sets[m_curSet];
         if (InRect(m_backRect, mx, my)) { m_view = V_SETS; m_viewT = 0.0f; return; }
+        // G5：星云入口
+        if (InRect(m_nebBtn, mx, my)) {
+            if (st.boxes.empty()) { Toast(L"先建一个题盒，星云才有轨道"); return; }
+            m_view = V_NEBULA; m_viewT = 0.0f; m_hoverNeb = -1;
+            return;
+        }
         for (size_t i = 0; i < m_boxRects.size(); ++i) {
             if (InRect(m_boxRects[i], mx, my)) {
                 if (InRect(m_boxDelRects[i], mx, my)) {
@@ -1172,7 +1402,8 @@ void QuizBoxView::Paint(Canvas& cv)
     if (m_view == V_SETS)       DrawSets(cv, s);
     else if (m_view == V_BOXES) DrawBoxes(cv, s);
     else if (m_view == V_BOX)   DrawBox(cv, s);
-    else                        DrawDraw(cv, s);
+    else if (m_view == V_DRAW) DrawDraw(cv, s);
+    else                        DrawNebula(cv, s);
 
     cv.PopTransform();
     cv.PopClip();
@@ -1239,15 +1470,13 @@ void QuizBoxView::DebugForcePreview()
 
 void QuizBoxView::DebugForceOpen()
 {
-    // --edit 截图：G3 抽卡态（弹卡完成 + 翻面到答案 + 记住/答错反馈按钮）
+    // --edit 截图：G5 星云态（轨道 + 中心房子 + 难度色小方块）
     if (m_sets.empty()) DebugForcePreview();
-    if (!m_sets.empty() && !m_sets[0].boxes.empty() && !m_sets[0].boxes[0].cards.empty()) {
-        m_view = V_DRAW; m_viewT = 1.0f;
-        m_curSet = 0; m_curBox = 0;
-        m_drawIdx = 0;
-        m_flip = true;
-        m_popT = 1.0f;
-        m_flipT = 1.0f;
+    if (!m_sets.empty()) {
+        m_view = V_NEBULA; m_viewT = 1.0f;
+        m_curSet = 0;
+        m_hoverNeb = -1;
+        m_orbit = 0.5f;
     }
 }
 
