@@ -119,6 +119,30 @@ private:
     D2D1_RECT_F m_nebBackRect{};
     void DrawNebula(Canvas& cv, float s);
 
+    // ---- G6：T9 星云拖拽归类 ----
+    bool  m_nebDrag = false;
+    int   m_nebDragIdx = -1;          // m_nebCards 下标
+    float m_nebDragX = 0.0f, m_nebDragY = 0.0f;
+    int   m_nebDropBox = -1;          // 拖拽悬停的目标轨道（题盒索引，-1 无）
+    // ---- G6：T11 侧边栏（搜索 / 排列 / 聚焦 / 题集切换）----
+    FieldEdit m_search;               // 搜索框（星云态专用）
+    bool  m_searchActive = false;     // 搜索框编辑中
+    std::wstring m_searchStr;
+    std::vector<std::pair<int,int>> m_searchHits;   // 命中 (boxIdx,cardIdx)
+    bool  m_showMode = false;         // 展现模式：命中卡片依次排列
+    float m_showT = 0.0f;
+    int   m_sortMode = 0;             // 0=默认 1=时间 2=难度 3=热度
+    bool  m_focusOn = false;          // 聚焦放大镜
+    float m_focusX = 0.0f, m_focusY = 0.0f;   // 聚焦中心（跟随鼠标，Update 记录）
+    D2D1_RECT_F m_sbSearchBox{}, m_sbSearchGo{}, m_sbShowBtn{};
+    D2D1_RECT_F m_sbSortR[3]{};
+    D2D1_RECT_F m_sbFocusBtn{}, m_sbSetBtn{};
+    std::vector<std::pair<std::wstring, int>> m_sbOtherSets;   // 其他题集（名,索引）
+    std::vector<D2D1_RECT_F> m_sbSetRects;
+    void ApplySearch();              // m_searchStr → m_searchHits
+    void EnterShowMode();
+    void DrawSidebar(Canvas& cv);    // G6 T11：星云右侧功能栏（搜索/排列/聚焦/题集）
+
     D2D1_RECT_F m_area{};
     Canvas* m_cv = nullptr;
     float m_t = 0.0f;
