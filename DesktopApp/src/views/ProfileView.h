@@ -14,8 +14,10 @@
 #include "app/Data.h"
 #include "app/Store.h"
 #include "app/AccountStore.h"
+#include "quiz/QuizStore.h"
 #include "core/Hwnd.h"
 #include <windows.h>
+#include <wrl/client.h>
 #include <vector>
 #include <string>
 #include <mutex>
@@ -36,13 +38,15 @@ public:
     void Paint(Canvas& cv) override;
 
 private:
-    enum PF { PF_BIO = 0, PF_SCHOOL, PF_BIRTH, PF_MAJOR, PF_GENDER };
+    enum PF { PF_BIO = 0, PF_SCHOOL, PF_BIRTH, PF_MAJOR, PF_GENDER, PF_NAME = 5 };
 
     void PaintTitle(Canvas& cv, float x0, float y, float w);
     void PaintHero(Canvas& cv);
     void PaintStats(Canvas& cv);
+    void PaintWeak(Canvas& cv);    // 批次 H：个人错题本（薄弱知识点）
     void PaintFavs(Canvas& cv);
     void PaintHistory(Canvas& cv);
+    void PickAvatar();             // 批次 H：选择图片作为头像
 
     void ReloadAll();
     void SaveProfile();
@@ -71,6 +75,12 @@ private:
     float m_statsY = 0.0f;
     float m_favTitleY = 0.0f;
     float m_histTitleY = 0.0f;
+    // 批次 H：昵称 / 头像 / 错题本
+    D2D1_RECT_F m_nameRect{};                 // Hero 名字点击区（就地改名）
+    float m_weakTitleY = 0.0f;                // 错题本板块标题 Y
+    std::vector<std::pair<std::wstring, int>> m_weakPts;   // 薄弱知识点 → 答错次数
+    Microsoft::WRL::ComPtr<ID2D1Bitmap> m_avatarBmp;       // 头像位图缓存
+    std::wstring m_avatarBmpPath;
 
     struct FavHit { D2D1_RECT_F r; int idx; };
     std::vector<FavHit> m_favHits;

@@ -84,6 +84,12 @@ private:
     void PaintStepBtn(Canvas& cv, SRow& r, const Palette& pal);
     void PaintStepBtn2(Canvas& cv, const D2D1_RECT_F& r, const wchar_t* sym, const Palette& pal);
     void PaintTextBox(Canvas& cv, SRow& r, const Palette& pal);
+    void PaintProcList(Canvas& cv);   // 批次 H：正在运行软件选择浮层
+
+    // 批次 H：专注白名单快速添加
+    void BrowseWhitelistFile();       // 选择 exe 文件加入白名单
+    void OpenProcList();              // 枚举正在运行的进程弹浮层选择
+    void AddWhitelist(const std::wstring& exeName);
 
     static bool InRect(const D2D1_RECT_F& r, float x, float y)
     { return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom; }
@@ -112,6 +118,15 @@ private:
     SRow*  m_active = nullptr;
     bool   m_editing = false;
     float  m_caretT = 0.0f;
+
+    // 批次 H：白名单快速添加按钮 + 正在运行软件浮层
+    D2D1_RECT_F m_wlFileBtn{};   // 「+ 文件」
+    D2D1_RECT_F m_wlProcBtn{};   // 「+ 运行中」
+    bool  m_procOpen = false;    // 浮层打开（独占输入）
+    float m_procScroll = 0.0f;
+    D2D1_RECT_F m_procPanel{};
+    std::vector<std::wstring> m_procs;        // 进程名（去重排序）
+    std::vector<D2D1_RECT_F>  m_procRows;     // 可点行（屏幕坐标）
 };
 
 } // namespace lj

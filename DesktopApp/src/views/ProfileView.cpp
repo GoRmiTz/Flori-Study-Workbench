@@ -3,6 +3,8 @@
 #include "core/Hwnd.h"
 #include "ui/FieldText.h"
 #include "ui/Layout.h"
+#include <wincodec.h>
+#include <commdlg.h>
 #include <algorithm>
 #include <cmath>
 #include <ctime>
@@ -46,7 +48,7 @@ std::wstring KindLabel(const std::wstring& k)
 void ProfileView::BeginEdit(int field, const D2D1_RECT_F& r)
 {
     if (m_editingOn) CommitEdit();
-    if (field < 0 || field > 4) return;
+    if (field < 0 || field > 5) return;
     m_editField = field;
     m_editingOn = true;
     // 1×1 透明代理只收键盘 + IME，字段上无任何 GDI 子窗口（无白块）；
@@ -61,9 +63,10 @@ void ProfileView::BeginEdit(int field, const D2D1_RECT_F& r)
         case PF_MAJOR:  cur = m_profile.major; break;
         case PF_SCHOOL: cur = m_profile.school; break;
         case PF_BIRTH:  cur = m_profile.birthday; break;
+        case PF_NAME:   cur = m_profile.displayName; break;   // 批次 H：昵称（不改账号）
         default: break;
     }
-    m_edit.Begin(cur, false, 13.0f);
+    m_edit.Begin(cur, false, field == PF_NAME ? 22.0f : 13.0f);
     (void)r;   // 位置由 Paint 每帧按字段矩形摆放（1×1 代理贴光标）
 }
 
@@ -84,6 +87,7 @@ void ProfileView::CommitEdit()
         case PF_MAJOR:  m_profile.major = txt; break;
         case PF_SCHOOL: m_profile.school = txt; break;
         case PF_BIRTH:  m_profile.birthday = txt; break;
+        case PF_NAME:   m_profile.displayName = txt; break;   // 批次 H：仅改显示名，账号不变
         default: break;
     }
     m_editingOn = false;
@@ -103,6 +107,8 @@ D2D1_RECT_F ProfileView::EditTextBox() const
 {
     if (m_editField == PF_BIO)
         return { m_bioRect.left + 12.0f, m_bioRect.top, m_bioRect.right - 12.0f, m_bioRect.bottom };
+    if (m_editField == PF_NAME)   // 批次 H：昵称（Hero 名字行）
+        return { m_nameRect.left, m_nameRect.top, m_nameRect.right, m_nameRect.bottom };
     if (m_editField < 0 || m_editField > 4) return { 0, 0, 0, 0 };
     const D2D1_RECT_F& r = m_fieldRects[m_editField];
     D2D1_RECT_F vr{ r.left + 8.0f, r.top + 26.0f, r.right - 8.0f, r.bottom - 8.0f };
@@ -200,6 +206,11 @@ void ProfileView::ReloadAll()
     m_focusMin = 0;
     for (const auto& f : cs.LoadFocus()) m_focusMin += f.min;
 
+    // 批次 H：个人错题本数据（练考薄弱知识点 TOP 8）
+    quiz::QuizStore::Instance().SetRoot(as.CurrentRoot());
+    m_weakPts = quiz::QuizStore::Instance().TopWeakPoints(8);
+    m_avatarBmp.Reset();   // 账户可能切换，头像位图重载
+
     // 收藏 / 历史：新的在前
     std::sort(m_favs.begin(), m_favs.end(),
               [](const Favorite& a, const Favorite& b) { return a.ts > b.ts; });
@@ -249,6 +260,7 @@ void ProfileView::Layout(const D2D1_RECT_F& area, Canvas& cv)
         m_heroRect = { x0, top, x0 + contentW, top + heroH };
         m_avatar = { x0 + 24.0f, top + 26.0f, x0 + 24.0f + 84.0f, top + 26.0f + 84.0f };
         float infoL = m_avatar.right + 24.0f;
+        m_nameRect = { infoL, top + 20.0f, m_heroRect.right - 200.0f, top + 58.0f };   // 批次 H：点击改名
         m_bioRect = { infoL, top + 96.0f, m_heroRect.right - 24.0f, top + 96.0f + 40.0f };
         m_fieldRects[PF_BIO] = m_bioRect;
     }
@@ -279,6 +291,16 @@ void ProfileView::Layout(const D2D1_RECT_F& area, Canvas& cv)
             m_statRects[i] = { sx, m_statsY, sx + sw, m_statsY + 66.0f };
         }
     }
+
+    // ---- 批次 H：个人错题本（薄弱知识点）----
+    m_weakTitleY = flow.block(44.0f).top;
+    if (m_weakPts.empty()) {
+        flow.block(56.0f);
+    } else {
+        int n = (std::min)((int)m_weakPts.size(), 8);
+        for (int i = 0; i < n; ++i) flow.block(34.0f + 6.0f);
+    }
+    flow.block(18.0f);
 
     // ---- 收藏区 ----
     m_favTitleY = flow.block(44.0f).top;
@@ -380,6 +402,13 @@ void ProfileView::Update(float dt, const Input& in)
 
     if (!in.clicked) return;
 
+    // 批次 H：头像点击 → 选图更换（访客无档案目录，不开放）；名字点击 → 就地改昵称
+    if (Hit(m_avatar, mx, my)) {
+        if (!AccountStore::Instance().IsGuest()) PickAvatar();
+        return;
+    }
+    if (Hit(m_nameRect, mx, my)) { BeginEdit(PF_NAME, m_nameRect); return; }
+
     // 字段点击
     if (m_hoverField >= 0) {
         int f = m_hoverField;
@@ -418,6 +447,7 @@ void ProfileView::Paint(Canvas& cv)
     PaintTitle(cv, x0, m_contentTop, contentW);
     PaintHero(cv);
     PaintStats(cv);
+    PaintWeak(cv);   // 批次 H：个人错题本
     PaintFavs(cv);
     PaintHistory(cv);
 
@@ -490,38 +520,83 @@ void ProfileView::PaintHero(Canvas& cv)
     std::wstring name = as.CurrentName();
     std::wstring uid = as.UserId();
     bool guest = as.IsGuest();
+    // 批次 H：昵称优先（不改账号）；头像点击可换图
+    std::wstring disp = m_profile.displayName.empty() ? name : m_profile.displayName;
+    bool nameEditing = (m_editingOn && m_editField == PF_NAME);
 
     cv.PaperCard(m_heroRect, 0.35f, shape::kEdge);
     cv.FillRect({ m_heroRect.left, m_heroRect.top, m_heroRect.left + 3.0f, m_heroRect.bottom },
                 WithAlpha(pal.seal, 0.85f));
 
-    // 头像：朱砂圆章 + 首字
+    // 头像：自选图片优先，否则朱砂圆章 + 首字；点击头像可更换图片
     float cx = (m_avatar.left + m_avatar.right) * 0.5f;
     float cy = (m_avatar.top + m_avatar.bottom) * 0.5f;
     float rr = (m_avatar.right - m_avatar.left) * 0.5f;
-    cv.FillCircle(cx, cy, rr, WithAlpha(pal.seal, pal.dark ? 0.26f : 0.14f));
-    cv.StrokeCircle(cx, cy, rr, WithAlpha(pal.seal, 0.8f), shape::kStroke);
-    cv.StrokeCircle(cx, cy, rr - 4.0f, WithAlpha(pal.seal, 0.35f), shape::kHair);
-    {
+    bool haveAvatar = false;
+    if (!m_profile.avatar.empty()) {
+        // 懒加载（账户目录内 avatar.*）
+        std::wstring p = as.CurrentRoot() + m_profile.avatar;
+        if (!m_avatarBmp || m_avatarBmpPath != p) {
+            m_avatarBmpPath = p;
+            m_avatarBmp.Reset();
+            ComPtr<IWICImagingFactory> wic;
+            if (SUCCEEDED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
+                                           IID_PPV_ARGS(&wic)))) {
+                ComPtr<IWICBitmapDecoder> dec;
+                if (SUCCEEDED(wic->CreateDecoderFromFilename(p.c_str(), nullptr, GENERIC_READ,
+                                                             WICDecodeMetadataCacheOnLoad, &dec))) {
+                    ComPtr<IWICBitmapFrameDecode> frame;
+                    if (SUCCEEDED(dec->GetFrame(0, &frame)))
+                        cv.DC()->CreateBitmapFromWicBitmap(frame.Get(), nullptr, &m_avatarBmp);
+                }
+            }
+        }
+        haveAvatar = m_avatarBmp != nullptr;
+    }
+    if (haveAvatar) {
+        cv.DrawBitmap(m_avatarBmp.Get(), m_avatar, 1.0f);
+        cv.StrokeRoundRect(m_avatar, 6.0f, WithAlpha(pal.seal, 0.8f), shape::kStroke);
+    } else {
+        cv.FillCircle(cx, cy, rr, WithAlpha(pal.seal, pal.dark ? 0.26f : 0.14f));
+        cv.StrokeCircle(cx, cy, rr, WithAlpha(pal.seal, 0.8f), shape::kStroke);
+        cv.StrokeCircle(cx, cy, rr - 4.0f, WithAlpha(pal.seal, 0.35f), shape::kHair);
         TextStyle av; av.role = FontRole::Serif; av.size = 34.0f;
         av.weight = DWRITE_FONT_WEIGHT_BLACK;
         av.hAlign = HAlign::Center; av.vAlign = VAlign::Middle;
-        cv.Text(name.empty() ? L"?" : name.substr(0, 1), m_avatar, av, pal.seal);
+        cv.Text(disp.empty() ? L"?" : disp.substr(0, 1), m_avatar, av, pal.seal);
+    }
+    // 头像右下角小相机徽标（提示可点更换）
+    {
+        float bx = m_avatar.right - 10.0f, by = m_avatar.bottom - 10.0f;
+        cv.FillCircle(bx, by, 10.0f, pal.seal);
+        TextStyle cb; cb.size = 10.0f; cb.hAlign = HAlign::Center; cb.vAlign = VAlign::Middle;
+        cv.Text(L"换", { bx - 10.0f, by - 10.0f, bx + 10.0f, by + 10.0f }, cb, pal.paperHi);
     }
 
     float infoL = m_avatar.right + 24.0f;
-    // 名号
-    TextStyle ns; ns.role = FontRole::Serif; ns.size = 25.0f;
-    ns.weight = DWRITE_FONT_WEIGHT_BOLD; ns.letterSpacing = 1.5f;
-    cv.Text(name, { infoL, m_heroRect.top + 24.0f, m_heroRect.right - 200.0f, m_heroRect.top + 58.0f },
-            ns, pal.ink900);
+    // 名号（批次 H：点击就地改昵称；编辑态由 FieldEdit 绘制）
+    if (nameEditing) {
+        TextStyle ns2; ns2.role = FontRole::Serif; ns2.size = 22.0f;
+        ns2.weight = DWRITE_FONT_WEIGHT_BOLD; ns2.vAlign = VAlign::Middle;
+        m_edit.Paint(cv, m_nameRect, ns2, pal.ink900, L"", pal.ink300, 0.0f, ScrollY());
+    } else {
+        TextStyle ns; ns.role = FontRole::Serif; ns.size = 25.0f;
+        ns.weight = DWRITE_FONT_WEIGHT_BOLD; ns.letterSpacing = 1.5f;
+        cv.Text(disp, m_nameRect, ns, pal.ink900);
+        TextStyle hnt; hnt.role = FontRole::Mono; hnt.size = 9.5f; hnt.letterSpacing = 1.0f;
+        cv.Text(L"点击改名", { m_nameRect.right - 76.0f, m_nameRect.top - 6.0f,
+                               m_nameRect.right, m_nameRect.top + 10.0f }, hnt, pal.ink300);
+    }
 
-    // UID + 角色
+    // UID + 角色（账号名固定不变，仅昵称显示层可改）
     TextStyle us; us.role = FontRole::Mono; us.size = 11.0f; us.letterSpacing = 1.0f;
     std::wstring role = guest ? L"访客（数据仅存本机）"
                               : (as.IsDemoCurrent() ? L"演示账户" : L"注册账户");
     std::wstring cloud = Cloud::Instance().LoggedIn() ? L"云端已登录" : L"云端未登录";
-    cv.Text(L"UID " + uid + L"   ·   " + role + L"   ·   " + cloud,
+    std::wstring acctLine = (m_profile.displayName.empty() || guest)
+        ? (L"UID " + uid + L"   ·   " + role + L"   ·   " + cloud)
+        : (L"UID " + uid + L"   ·   账号 " + name + L"   ·   " + cloud);
+    cv.Text(acctLine,
             { infoL, m_heroRect.top + 62.0f, m_heroRect.right - 24.0f, m_heroRect.top + 82.0f },
             us, pal.ink500);
 
@@ -750,6 +825,93 @@ void ProfileView::PaintHistory(Canvas& cv)
 
     cv.PopOpacity();
     cv.PopTransform();
+}
+
+// ============================================================
+//  批次 H：个人错题本（练考薄弱知识点 TOP）
+// ============================================================
+void ProfileView::PaintWeak(Canvas& cv)
+{
+    const auto& pal = cv.Pal();
+    float a = Clamp01(m_t / 0.5f);
+    if (a <= 0.004f) return;
+
+    TextStyle sec; sec.role = FontRole::Mono; sec.size = 10.5f;
+    sec.letterSpacing = 2.4f; sec.weight = DWRITE_FONT_WEIGHT_BOLD;
+    cv.PushOpacity(a);
+    cv.Text(L"SECTION · 个人错题本 · 薄弱知识点", { m_area.left + 28.0f, m_weakTitleY,
+            m_area.left + 460.0f, m_weakTitleY + 16.0f }, sec, pal.ink300);
+    cv.PopOpacity();
+
+    float y = m_weakTitleY + 26.0f;
+    float w = m_area.right - m_area.left - 56.0f;
+    float x0 = m_area.left + 28.0f;
+
+    if (m_weakPts.empty()) {
+        TextStyle et; et.size = 12.5f; et.role = FontRole::Sans; et.vAlign = VAlign::Middle;
+        cv.Text(L"还没有错题记录。完成每日练考后，答错的知识点会自动汇入这里。",
+                { x0, y, x0 + w, y + 34.0f }, et, pal.ink500);
+        return;
+    }
+
+    int maxN = 1;
+    for (auto& wp : m_weakPts) maxN = (std::max)(maxN, wp.second);
+    int n = (std::min)((int)m_weakPts.size(), 8);
+    for (int i = 0; i < n; ++i) {
+        const auto& wp = m_weakPts[i];
+        float rowY = y + (float)i * 40.0f;
+        // 名称 + 次数
+        TextStyle ts; ts.size = 13.0f; ts.role = FontRole::Sans; ts.vAlign = VAlign::Middle;
+        ts.weight = DWRITE_FONT_WEIGHT_SEMI_BOLD;
+        cv.Text(wp.first, { x0, rowY, x0 + w * 0.55f, rowY + 26.0f }, ts, pal.ink900);
+        TextStyle cs; cs.role = FontRole::Mono; cs.size = 11.0f; cs.vAlign = VAlign::Middle;
+        cs.hAlign = HAlign::Right;
+        cv.Text(std::to_wstring(wp.second) + L" 次",
+                { x0 + w - 90.0f, rowY, x0 + w, rowY + 26.0f }, cs, pal.seal);
+        // 比例条
+        float barW = w * 0.30f;
+        float bx = x0 + w * 0.58f;
+        float t = (float)wp.second / (float)maxN;
+        cv.FillRoundRect({ bx, rowY + 9.0f, bx + barW, rowY + 15.0f }, 3.0f,
+                         WithAlpha(pal.rule, 0.6f));
+        if (t > 0.01f)
+            cv.FillRoundRect({ bx, rowY + 9.0f, bx + barW * t, rowY + 15.0f }, 3.0f,
+                             WithAlpha(pal.seal, 0.85f));
+    }
+}
+
+// 批次 H：选择图片作为头像（拷入账户目录，存文件名到 profile.json）
+void ProfileView::PickAvatar()
+{
+    wchar_t path[MAX_PATH] = { 0 };
+    OPENFILENAMEW ofn = { 0 };
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = AppHwnd();
+    ofn.lpstrFilter = L"图片 (*.png;*.jpg;*.jpeg;*.bmp)\0*.png;*.jpg;*.jpeg;*.bmp\0所有文件 (*.*)\0*.*\0";
+    ofn.lpstrFile = path;
+    ofn.nMaxFile = MAX_PATH;
+    ofn.lpstrTitle = L"选择头像图片";
+    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_EXPLORER;
+    if (!GetOpenFileNameW(&ofn)) return;
+
+    auto& as = AccountStore::Instance();
+    // 取扩展名 → 目标文件名 avatar.<ext>
+    std::wstring src = path;
+    size_t dot = src.find_last_of(L'.');
+    std::wstring ext = (dot == std::wstring::npos) ? L".png" : src.substr(dot);
+    for (auto& c : ext) c = (wchar_t)towlower(c);
+    std::wstring dst = as.CurrentRoot() + L"avatar" + ext;
+    if (!CopyFileW(src.c_str(), dst.c_str(), FALSE)) {
+        m_toast = L"头像拷贝失败，请重试";
+        m_toastBad = true; m_toastT = 2.5f;
+        return;
+    }
+    m_profile.avatar = L"avatar" + ext;
+    SaveProfile();
+    m_avatarBmp.Reset();          // 强制重载
+    m_avatarBmpPath.clear();
+    m_toast = L"头像已更新";
+    m_toastBad = false; m_toastT = 2.5f;
 }
 
 } // namespace lj

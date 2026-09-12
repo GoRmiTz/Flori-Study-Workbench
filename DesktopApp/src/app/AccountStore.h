@@ -37,6 +37,8 @@ struct AccountProfile
     std::wstring school;    // 学校
     std::wstring birthday;  // 生日
     std::wstring gender;    // 性别
+    std::wstring displayName;  // 批次 H：昵称（仅显示用，不影响登录账号；空 = 用账号名）
+    std::wstring avatar;    // 批次 H：头像文件名（账户目录内，如 avatar.png；空 = 首字圆章）
 };
 
 class AccountStore

@@ -637,6 +637,8 @@ AccountProfile AccountStore::LoadProfile() const
     p.school  = gs("school");
     p.birthday = gs("birthday");
     p.gender  = gs("gender");
+    p.displayName = gs("displayName");   // 批次 H
+    p.avatar  = gs("avatar");            // 批次 H
     return p;
 }
 
@@ -647,7 +649,9 @@ void AccountStore::SaveProfile(const AccountProfile& p)
     s += "  \"major\": "   + jStr(W2U(p.major))   + ",\n";
     s += "  \"school\": "  + jStr(W2U(p.school))  + ",\n";
     s += "  \"birthday\": " + jStr(W2U(p.birthday)) + ",\n";
-    s += "  \"gender\": "  + jStr(W2U(p.gender))  + "\n";
+    s += "  \"gender\": "  + jStr(W2U(p.gender))  + ",\n";
+    s += "  \"displayName\": " + jStr(W2U(p.displayName)) + ",\n";
+    s += "  \"avatar\": "  + jStr(W2U(p.avatar))  + "\n";
     s += "}\n";
     std::wstring fp = CurrentRoot() + L"profile.json";
     FILE* f = _wfopen(fp.c_str(), L"wb");

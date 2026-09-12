@@ -9,6 +9,9 @@
 #include "core/Hwnd.h"
 #include "app/AccountStore.h"
 #include <windows.h>
+#include <wincodec.h>
+#include <commdlg.h>
+#include <tlhelp32.h>
 #include <cstdio>
 #include <string>
 #include <vector>
@@ -247,7 +250,13 @@ void SettingsView::Layout(const D2D1_RECT_F& area, Canvas& cv)
                 r.value = { right - btn - bw - sp, ry + (rowH - bh) * 0.5f, right - btn - sp, ry + (rowH + bh) * 0.5f };
                 r.dec   = { right - btn - bw - sp - btn - sp, ry + (rowH - btn) * 0.5f, right - btn - bw - sp, ry + (rowH + btn) * 0.5f };
             } else {
-                r.box = { right - 300.0f, ry + 8.0f, right, ry + rowH - 8.0f };
+                // 批次 H：白名单行 box 左移 160px，右侧留出「+文件 / +运行中」按钮列
+                float boxR = (r.pStr == &m_focusApps) ? right - 160.0f : right;
+                r.box = { boxR - 300.0f, ry + 8.0f, boxR, ry + rowH - 8.0f };
+                if (r.pStr == &m_focusApps) {
+                    m_wlFileBtn = { boxR + 8.0f,  ry + 8.0f,  boxR + 76.0f,  ry + rowH - 8.0f };
+                    m_wlProcBtn = { boxR + 84.0f, ry + 8.0f,  boxR + 152.0f, ry + rowH - 8.0f };
+                }
             }
             ry += rowH;
         }
@@ -282,9 +291,38 @@ void SettingsView::Update(float dt, const Input& in)
     // 返回
     if (in.clicked && InRect(m_backBtn, mx, my)) { Go(L"home"); return; }
 
+    // 批次 H：正在运行软件浮层打开时独占输入
+    if (m_procOpen) {
+        if (in.wheel != 0.0f) {
+            m_procScroll -= in.wheel * 26.0f;
+            m_procScroll = (std::max)(0.0f, (std::min)(m_procScroll,
+                (float)(std::max)(0, (int)m_procs.size() * 26 - 300)));
+        }
+        if (in.clicked) {
+            bool hitRow = false;
+            for (size_t i = 0; i < m_procRows.size(); ++i) {
+                if (InRect(m_procRows[i], mx, my)) {
+                    AddWhitelist(m_procs[i]);
+                    m_procOpen = false;
+                    hitRow = true;
+                    break;
+                }
+            }
+            if (!hitRow && !InRect(m_procPanel, mx, my)) m_procOpen = false;   // 点外关闭
+        }
+        return;   // 浮层独占
+    }
+
     for (auto& r : m_rows) {
         if (!InRect(r.rect, mx, my)) continue;
         if (!in.clicked) break;
+
+        // 批次 H：白名单行的「+文件 / +运行中」快速添加按钮
+        if (r.type == SRow::Text && r.pStr == &m_focusApps) {
+            if (InRect(m_wlFileBtn, mx, my)) { BrowseWhitelistFile(); return; }
+            if (InRect(m_wlProcBtn, mx, my)) { OpenProcList(); return; }
+        }
+
         if (r.type == SRow::Toggle) {
             if (r.pBool) {
                 bool wasDark = m_dark;
@@ -385,8 +423,24 @@ void SettingsView::Paint(Canvas& cv)
             if (r.type == SRow::Toggle)      PaintToggle(cv, r.toggle, r.pBool ? *r.pBool : false, pal);
             else if (r.type == SRow::Stepper) PaintStepper(cv, r, pal);
             else                              PaintTextBox(cv, r, pal);
+
+            // 批次 H：白名单行「+文件 / +运行中」快速添加按钮
+            if (r.type == SRow::Text && r.pStr == &m_focusApps) {
+                auto DrawAddBtn = [&](const D2D1_RECT_F& br, const wchar_t* label) {
+                    cv.FillRoundRect(br, 5.0f, pal.paperLo);
+                    cv.StrokeRoundRect(br, 5.0f, pal.rule, shape::kHair);
+                    TextStyle bs2; bs2.role = FontRole::Sans; bs2.size = 11.5f;
+                    bs2.hAlign = HAlign::Center; bs2.vAlign = VAlign::Middle;
+                    cv.Text(label, br, bs2, pal.ink700);
+                };
+                DrawAddBtn(m_wlFileBtn, L"+ 文件");
+                DrawAddBtn(m_wlProcBtn, L"+ 运行中");
+            }
         }
     }
+
+    // 批次 H：正在运行软件选择浮层（最上层）
+    if (m_procOpen) PaintProcList(cv);
 
     // 返回按钮
     cv.FillRoundRect(m_backBtn, shape::kEdge, pal.paperLo);
@@ -461,6 +515,112 @@ void SettingsView::PaintTextBox(Canvas& cv, SRow& r, const Palette& pal)
         if (disp.empty()) cv.Text(L"点击填写\u2026", tbox, ts, pal.ink300);
         else              cv.Text(disp, tbox, ts, pal.ink900);
     }
+}
+
+// ============================================================
+//  批次 H：专注白名单快速添加（选文件 / 选正在运行的软件）
+// ============================================================
+void SettingsView::AddWhitelist(const std::wstring& exeName)
+{
+    if (exeName.empty()) return;
+    // 规整：去路径/去 .exe/转小写（与 NormProc 同口径）
+    std::wstring name = exeName;
+    size_t slash = name.find_last_of(L"\\/");
+    if (slash != std::wstring::npos) name = name.substr(slash + 1);
+    size_t dot = name.rfind(L'.');
+    if (dot != std::wstring::npos && _wcsicmp(name.c_str() + dot, L".exe") == 0) name = name.substr(0, dot);
+    for (auto& c : name) c = (wchar_t)towlower(c);
+    if (name.empty()) return;
+
+    // 去重后追加到逗号串
+    std::wstring cur = m_focusApps;
+    std::wstring low = cur;
+    for (auto& c : low) c = (wchar_t)towlower(c);
+    std::wstring lowName = name;
+    for (auto& c : lowName) c = (wchar_t)towlower(c);
+    if (low.find(lowName) != std::wstring::npos) return;   // 已存在
+    if (!cur.empty()) cur += L", ";
+    m_focusApps = cur + name;
+    Apply();
+}
+
+void SettingsView::BrowseWhitelistFile()
+{
+    wchar_t path[MAX_PATH] = { 0 };
+    OPENFILENAMEW ofn = { 0 };
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = GetActiveWindow();
+    ofn.lpstrFilter = L"程序 (*.exe)\0*.exe\0所有文件 (*.*)\0*.*\0";
+    ofn.lpstrFile = path;
+    ofn.nMaxFile = MAX_PATH;
+    ofn.lpstrTitle = L"选择要加入专注白名单的程序";
+    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_EXPLORER;
+    if (GetOpenFileNameW(&ofn)) AddWhitelist(path);
+}
+
+void SettingsView::OpenProcList()
+{
+    m_procs.clear();
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snap != INVALID_HANDLE_VALUE) {
+        PROCESSENTRY32W pe{};
+        pe.dwSize = sizeof(pe);
+        if (Process32FirstW(snap, &pe)) {
+            std::vector<std::wstring> all;
+            do {
+                if (pe.szExeFile[0]) all.push_back(pe.szExeFile);
+            } while (Process32NextW(snap, &pe));
+            CloseHandle(snap);
+            std::sort(all.begin(), all.end());
+            all.erase(std::unique(all.begin(), all.end()), all.end());
+            m_procs = std::move(all);
+        }
+    }
+    m_procScroll = 0.0f;
+    m_procOpen = true;
+}
+
+// 浮层：居中面板 + 可滚动进程列表（点击加入白名单，点外关闭）
+void SettingsView::PaintProcList(Canvas& cv)
+{
+    const auto& pal = cv.Pal();
+    float W = m_area.right - m_area.left;
+    float H = m_area.bottom - m_area.top;
+
+    cv.FillRect(m_area, WithAlpha(pal.ink900, 0.45f));
+    float pw = 380.0f, ph = 380.0f;
+    float px = (W - pw) * 0.5f, py = (H - ph) * 0.5f;
+    m_procPanel = { px, py, px + pw, py + ph };
+
+    cv.PaperCard(m_procPanel, 0.4f, shape::kEdge);
+    cv.StrokeRoundRect(m_procPanel, shape::kEdge, pal.rule, shape::kHair);
+
+    TextStyle hs; hs.role = FontRole::Mono; hs.size = 11.0f; hs.letterSpacing = 2.0f;
+    hs.weight = DWRITE_FONT_WEIGHT_BOLD;
+    cv.Text(L"正在运行的软件", { px + 20.0f, py + 16.0f, px + pw - 20.0f, py + 34.0f }, hs, pal.ink500);
+
+    float ly = py + 48.0f;
+    float lh = 26.0f;
+    int visible = (int)((py + ph - 20.0f - ly) / lh);
+    m_procRows.clear();
+    cv.PushClip({ px + 8.0f, ly, px + pw - 8.0f, py + ph - 16.0f });
+    int maxOff = (int)m_procs.size() - visible;
+    int first = (int)(m_procScroll / lh);
+    for (int i = first; i < (int)m_procs.size(); ++i) {
+        float ry = ly + (float)(i - first) * lh - (m_procScroll - (float)first * lh);
+        if (ry > py + ph - 14.0f) break;
+        D2D1_RECT_F row{ px + 14.0f, ry, px + pw - 14.0f, ry + lh };
+        if (ry >= ly - 1.0f) {
+            m_procRows.push_back(row);
+            TextStyle ts; ts.role = FontRole::Mono; ts.size = 12.0f; ts.vAlign = VAlign::Middle;
+            cv.Text(m_procs[i], { row.left + 8.0f, row.top, row.right - 8.0f, row.bottom }, ts, pal.ink700);
+        }
+    }
+    cv.PopClip();
+
+    TextStyle ft; ft.role = FontRole::Sans; ft.size = 11.0f;
+    cv.Text(L"点击条目加入白名单 · 点空白处关闭",
+            { px + 20.0f, py + ph - 30.0f, px + pw - 20.0f, py + ph - 12.0f }, ft, pal.ink300);
 }
 
 void SettingsView::DebugForcePreview()
