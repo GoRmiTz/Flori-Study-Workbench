@@ -53,17 +53,23 @@ private:
 
     HWND m_hwnd = nullptr;
     UINT m_timer = 0;
-    bool m_full = true;              // true=全屏封面 false=顶部胶囊
-    float m_idle = 99.0f;            // 鼠标静止秒数
+    bool m_full = false;             // false=顶部胶囊（默认起步） true=全屏封面
+    float m_idle = 0.0f;             // 鼠标静止秒数（GetCursorPos 轮询，窗口收不到
+                                     // mousemove 也能正确计时——胶囊态的关键）
     POINT m_lastPt{ -1, -1 };
     int  m_remain = 0;
     bool m_paused = false;
     std::wstring m_item;
+    int  m_lastPaintSec = -1;        // 重绘节流：秒数/状态没变就不重绘
 
     bool m_volDrag = false;
     // 客户区像素命中区（Paint 每帧刷新）
     RECT m_rPrev{}, m_rPlay{}, m_rNext{}, m_rVol{}, m_rPause{}, m_rEnd{};
     RECT m_rPillPause{}, m_rPillEnd{};
+    // GDI 字体缓存（每帧 CreateFont 是主线程卡顿的元凶，只建一次）
+    HFONT m_fTag = nullptr, m_fBig = nullptr, m_fItem = nullptr,
+          m_fMus = nullptr, m_fBtn = nullptr, m_fPill = nullptr, m_fVolS = nullptr;
+    void EnsureFonts();
 };
 
 } // namespace lj

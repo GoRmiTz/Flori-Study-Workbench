@@ -22,9 +22,14 @@ void FocusSaver::Start(const std::wstring& item, int remainSec)
     m_item = item;
     m_remain = remainSec;
     m_paused = false;
-    m_full = true;
+    // 批次 C 修正：以顶部胶囊起步（温和）；鼠标静止满 5 秒才展开全屏封面。
+    // 静止检测改为 GetCursorPos 轮询（屏幕坐标）——胶囊态窗口只有 480px 宽，
+    // 鼠标不在其上时窗口收不到 WM_MOUSEMOVE，旧方案因此「一秒一次」来回跳：
+    // 全屏形变本身还会触发一次假 mousemove，立刻又缩回胶囊。
+    m_full = false;
     m_idle = 0.0f;
     m_lastPt = { -1, -1 };
+    m_lastPaintSec = -1;
     if (!m_hwnd) CreateOverlay(GetModuleHandleW(nullptr));
     if (m_hwnd) ApplyShape();
 }
@@ -37,7 +42,31 @@ void FocusSaver::Stop()
 void FocusSaver::PushState(int remainSec, bool paused)
 {
     m_remain = remainSec;
-    m_paused = paused;
+    if (paused != m_paused) {
+        m_paused = paused;
+        if (m_hwnd) InvalidateRect(m_hwnd, nullptr, TRUE);   // 播放/暂停图标切换
+    }
+}
+
+namespace {
+HFONT MakeFont(int px, bool bold)
+{
+    return CreateFontW(-px, 0, 0, 0, bold ? FW_BOLD : FW_NORMAL, FALSE, FALSE, FALSE,
+                       DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                       CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Microsoft YaHei UI");
+}
+} // namespace
+
+void FocusSaver::EnsureFonts()
+{
+    if (m_fBig) return;
+    m_fTag  = MakeFont(15, true);
+    m_fBig  = MakeFont(120, true);
+    m_fItem = MakeFont(26, true);
+    m_fMus  = MakeFont(15, false);
+    m_fBtn  = MakeFont(17, true);
+    m_fPill = MakeFont(17, true);
+    m_fVolS = MakeFont(12, false);
 }
 
 void FocusSaver::CreateOverlay(HINSTANCE hInst)
@@ -57,7 +86,7 @@ void FocusSaver::CreateOverlay(HINSTANCE hInst)
         -32000, -32000, 10, 10, nullptr, nullptr, hInst, this);
     if (!m_hwnd) return;
     ShowWindow(m_hwnd, SW_SHOWNOACTIVATE);
-    m_timer = (UINT)SetTimer(m_hwnd, 1, 100, nullptr);   // 100ms：静止计时 + 重绘
+    m_timer = (UINT)SetTimer(m_hwnd, 1, 250, nullptr);   // 250ms：鼠标轮询 + 重绘节流
     RECT rc{}; GetWindowRect(m_hwnd, &rc);
     LogLine(L"[saver] overlay created %dx%d full=%d", rc.right - rc.left, rc.bottom - rc.top, (int)m_full);
 }
@@ -66,6 +95,10 @@ void FocusSaver::Destroy()
 {
     if (m_timer && m_hwnd) { KillTimer(m_hwnd, m_timer); m_timer = 0; }
     if (m_hwnd) { DestroyWindow(m_hwnd); m_hwnd = nullptr; }
+    // 字体缓存
+    HFONT* fonts[] = { &m_fTag, &m_fBig, &m_fItem, &m_fMus, &m_fBtn, &m_fPill, &m_fVolS };
+    for (auto* f : fonts) { if (*f) { DeleteObject(*f); *f = nullptr; } }
+    m_lastPaintSec = -1;
 }
 
 void FocusSaver::ApplyShape()
@@ -85,10 +118,7 @@ void FocusSaver::ApplyShape()
         SetWindowPos(m_hwnd, HWND_TOPMOST, (W - pw) / 2, (int)(14.0f * s), pw, ph,
                      SWP_NOACTIVATE | SWP_SHOWWINDOW);
     }
-#ifdef _DEBUG
-    RECT rc{}; GetWindowRect(m_hwnd, &rc);
-    LogLine(L"[saver] shape full=%d %dx%d", (int)m_full, rc.right - rc.left, rc.bottom - rc.top);
-#endif
+    if (m_hwnd) InvalidateRect(m_hwnd, nullptr, TRUE);   // 形态切换立即重绘
 }
 
 bool FocusSaver::Hit(const RECT& r, LPARAM lp) const
@@ -116,28 +146,44 @@ LRESULT FocusSaver::WndProc(UINT msg, WPARAM wp, LPARAM lp)
 {
     switch (msg) {
     case WM_MOUSEMOVE: {
-        POINT pt{ GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
-        // 音量拖动优先
+        // 静止检测不再依赖 mousemove（胶囊态收不到）；仅服务音量拖动
+        if (m_volDrag) {
+            POINT pt{ GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
+            float t = (float)(pt.x - m_rVol.left) / (float)(m_rVol.right - m_rVol.left);
+            t = t < 0 ? 0 : (t > 1 ? 1 : t);
+            MusicPlayer::Instance().SetVolume(t * t);
+        }
+        return 0;
+    }
+    case WM_TIMER: {
+        // —— 静止检测：GetCursorPos 屏幕坐标轮询（与窗口形态无关）——
+        POINT pt{};
+        GetCursorPos(&pt);
+        ScreenToClient(m_hwnd, &pt);   // 命中区是客户坐标，顺带转换
+        if (m_lastPt.x < 0 ||
+            std::fabs((float)pt.x - m_lastPt.x) > 1.0f ||
+            std::fabs((float)pt.y - m_lastPt.y) > 1.0f) {
+            m_lastPt = pt;
+            m_idle = 0.0f;
+            if (m_full) { m_full = false; ApplyShape(); }   // 移动 → 缩成胶囊
+        } else {
+            m_idle += 0.25f;
+            if (!m_full && m_idle >= 5.0f) { m_full = true; ApplyShape(); }   // 静止 5s → 封面
+        }
         if (m_volDrag) {
             float t = (float)(pt.x - m_rVol.left) / (float)(m_rVol.right - m_rVol.left);
             t = t < 0 ? 0 : (t > 1 ? 1 : t);
             MusicPlayer::Instance().SetVolume(t * t);
-            return 0;
         }
-        if (m_lastPt.x < 0 ||
-            std::fabs((float)pt.x - m_lastPt.x) > 0.5f ||
-            std::fabs((float)pt.y - m_lastPt.y) > 0.5f) {
-            m_lastPt = pt;
-            m_idle = 0.0f;
-            if (m_full) { m_full = false; ApplyShape(); }   // 移动 → 缩成胶囊
+        // —— 重绘节流：内容只在秒变化/状态变化时变，平时不重绘 ——
+        // （主线程与软件本体共享；上一版每 100ms 全屏重绘 + 重建大字体把 UI 卡住）
+        int sec = m_remain;
+        if (sec != m_lastPaintSec) {
+            m_lastPaintSec = sec;
+            if (m_hwnd) InvalidateRect(m_hwnd, nullptr, TRUE);
         }
         return 0;
     }
-    case WM_TIMER:
-        m_idle += 0.1f;
-        if (!m_full && m_idle >= 2.0f) { m_full = true; ApplyShape(); }   // 静止 2s → 封面
-        if (m_hwnd) InvalidateRect(m_hwnd, nullptr, TRUE);
-        return 0;
     case WM_LBUTTONDOWN:
         if (m_full) {
             if (Hit(m_rPrev, lp)) { MusicPlayer::Instance().Prev(); return 0; }
@@ -178,13 +224,6 @@ LRESULT FocusSaver::WndProc(UINT msg, WPARAM wp, LPARAM lp)
 
 // —— 小工具：居中画圆按钮（描边或实心）+ 简易矢量符号 ——
 namespace {
-
-HFONT MakeFont(int px, bool bold)
-{
-    return CreateFontW(-px, 0, 0, 0, bold ? FW_BOLD : FW_NORMAL, FALSE, FALSE, FALSE,
-                       DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                       CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Microsoft YaHei UI");
-}
 
 void FillCircle(HDC hdc, int cx, int cy, int r, COLORREF c)
 {
@@ -244,10 +283,10 @@ void FocusSaver::PaintFull(HDC hdc, int W, int H)
     const COLORREF ink   = RGB(242, 230, 216);
     const COLORREF ink3  = RGB(196, 184, 176);
     const COLORREF seal  = RGB(178, 84, 92);
+    EnsureFonts();
 
     // 顶部小字
-    HFONT hTag = MakeFont(15, true);
-    SelectObject(hdc, hTag);
+    SelectObject(hdc, m_fTag);
     SetTextColor(hdc, seal);
     RECT rt{ 0, H / 6, W, H / 6 + 30 };
     DrawTextW(hdc, L"专  注  中  ·  界  面  已  静  默", -1, &rt, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
@@ -256,15 +295,13 @@ void FocusSaver::PaintFull(HDC hdc, int W, int H)
     int remain = m_remain < 0 ? 0 : m_remain;
     int mm = remain / 60, ss = remain % 60;
     wchar_t tb[16]; swprintf_s(tb, L"%02d:%02d", mm, ss);
-    HFONT hBig = MakeFont(120, true);
-    SelectObject(hdc, hBig);
+    SelectObject(hdc, m_fBig);
     SetTextColor(hdc, ink);
     RECT rd{ 0, H / 6 + 40, W, H / 6 + 200 };
     DrawTextW(hdc, tb, -1, &rd, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 
     // 打卡项
-    HFONT hItem = MakeFont(26, true);
-    SelectObject(hdc, hItem);
+    SelectObject(hdc, m_fItem);
     SetTextColor(hdc, ink);
     std::wstring itemS = L"当前专注 · " + (m_item.empty() ? std::wstring(L"自习") : m_item);
     RECT ri{ 0, H / 6 + 215, W, H / 6 + 255 };
@@ -275,8 +312,7 @@ void FocusSaver::PaintFull(HDC hdc, int W, int H)
     auto ps = MusicPlayer::Instance().GetState();
     bool hasMusic = (ps != MusicPlayer::State::Idle) || MusicPlayer::Instance().Count() > 0;
     if (hasMusic) {
-        HFONT hMus = MakeFont(15, false);
-        SelectObject(hdc, hMus);
+        SelectObject(hdc, m_fMus);
         SetTextColor(hdc, ink3);
         std::wstring t = MusicPlayer::Instance().GetTitle();
         size_t n = MusicPlayer::Instance().Count(), i = MusicPlayer::Instance().Index();
@@ -328,27 +364,21 @@ void FocusSaver::PaintFull(HDC hdc, int W, int H)
         int fx = vx0 + (int)((vx1 - vx0) * vp);
         if (fx > vx0 + 2) Line(hdc, vx0, cy, fx, cy, RGB(176, 138, 84), 4);
         FillCircle(hdc, fx, cy, 6, RGB(196, 184, 176));
-        HFONT hVol = MakeFont(12, false);
-        SelectObject(hdc, hVol);
+        SelectObject(hdc, m_fVolS);
         SetTextColor(hdc, ink3);
         RECT rv{ vx1 + 12, cy - 12, vx1 + 90, cy + 12 };
         wchar_t vb[16]; swprintf_s(vb, L"音量 %d%%", (int)(vol * 100 + 0.5f));
         DrawTextW(hdc, vb, -1, &rv, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-        DeleteObject(hVol);
-        DeleteObject(hMus);
     }
     else {
-        HFONT hMus = MakeFont(15, false);
-        SelectObject(hdc, hMus);
+        SelectObject(hdc, m_fMus);
         SetTextColor(hdc, RGB(120, 110, 104));
         RECT rm{ 0, my, W, my + 26 };
         DrawTextW(hdc, L"未在播放背景音乐 · 可回自习室选择曲目", -1, &rm, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-        DeleteObject(hMus);
     }
 
     // —— 底部双按钮 ——
-    HFONT hBtn = MakeFont(17, true);
-    SelectObject(hdc, hBtn);
+    SelectObject(hdc, m_fBtn);
     int bw = 170, bh = 52, by = H - 110;
     int bx1 = W / 2 - bw - 14, bx2 = W / 2 + 14;
     // 暂停/继续（描边）
@@ -373,16 +403,11 @@ void FocusSaver::PaintFull(HDC hdc, int W, int H)
     SetTextColor(hdc, RGB(250, 244, 236));
     RECT re{ bx2, by, bx2 + bw, by + bh };
     DrawTextW(hdc, L"结 束 专 注", -1, &re, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-
-    DeleteObject(hTag); DeleteObject(hBig); DeleteObject(hItem); DeleteObject(hBtn);
 }
 
 // —— 顶部胶囊（鼠标移动时）——
 void FocusSaver::PaintPill(HDC hdc, int W, int H)
 {
-    // 透明底：只画胶囊本体（窗口外露区域由系统键色屏挡住？——WS_POPUP 无分层，
-    // 用与桌面差异最小的深色会挡桌面。改为窗口即胶囊大小（ApplyShape 已缩小），
-    // 此处背景即胶囊底。
     int rad = H / 2;
     HBRUSH hBg = CreateSolidBrush(RGB(247, 243, 236));
     HBRUSH hOld = (HBRUSH)SelectObject(hdc, hBg);
@@ -395,8 +420,8 @@ void FocusSaver::PaintPill(HDC hdc, int W, int H)
     SetBkMode(hdc, TRANSPARENT);
     int remain = m_remain < 0 ? 0 : m_remain;
     wchar_t tb[16]; swprintf_s(tb, L"%02d:%02d", remain / 60, remain % 60);
-    HFONT hT = MakeFont(17, true);
-    SelectObject(hdc, hT);
+    EnsureFonts();
+    SelectObject(hdc, m_fPill);
     SetTextColor(hdc, RGB(56, 48, 44));
     std::wstring s = std::wstring(tb) + L"  ·  " + (m_item.empty() ? std::wstring(L"自习") : m_item);
     RECT rt{ 16, 0, W - 100, H };
@@ -423,8 +448,6 @@ void FocusSaver::PaintPill(HDC hdc, int W, int H)
     FillCircle(hdc, ex, cy, 14, seal);
     Line(hdc, ex - 5, cy - 5, ex + 5, cy + 5, RGB(250, 244, 236), 2);
     Line(hdc, ex + 5, cy - 5, ex - 5, cy + 5, RGB(250, 244, 236), 2);
-
-    DeleteObject(hT);
 }
 
 } // namespace lj
