@@ -62,14 +62,6 @@ private:
     int m_todayEnt = 0, m_yearEnt = 0;   // 娱乐降权时长（不计专注）
     D2D1_RECT_F m_focusCard{};
 
-    // ---- F-D4 申论字数统计 ----
-    D2D1_RECT_F m_docxCard{};
-    D2D1_RECT_F m_docxBtnRect{};
-    D2D1_RECT_F m_docxRevokeRect{};
-    int  m_docxChars = 0;
-    bool m_docxOk = false;        // 已授权且字数统计成功
-    std::wstring m_docxFile;      // 显示用文件名
-
     // ---- F4 契约 ----
     std::vector<Pact> m_pacts;
     bool m_editingPact = false;
@@ -116,9 +108,6 @@ private:
     void LoadPacts(); void SavePacts();
     void PaintF3(Canvas& cv);               // 成就 + 年度回顾
     void PaintF4(Canvas& cv);               // 契约板
-    void OnDocxConnect();                   // F-D4 授权 + 选文件
-    void OnDocxRevoke();                   // F-D4 撤销授权
-    void PaintDocxButton(Canvas& cv, const D2D1_RECT_F& r, const std::wstring& label, const D2D1_COLOR_F& col);
     static std::wstring ToU(const std::wstring& s);  // wstring → UTF-8
 };
 

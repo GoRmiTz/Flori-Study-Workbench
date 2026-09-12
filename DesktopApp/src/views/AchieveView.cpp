@@ -14,8 +14,6 @@
 #include "app/AccountStore.h"
 #include "app/Store.h"
 #include "app/Json.h"
-#include "core/DocxStat.h"
-#include <commdlg.h>
 #include <algorithm>
 #include <windows.h>
 #include <algorithm>
@@ -329,17 +327,6 @@ void AchieveView::Layout(const D2D1_RECT_F& area, Canvas& cv)
             m_focusCard = { x0, cb.top + 8.0f, x0 + contentW, cb.top + 8.0f + innerH };
         }
 
-        // F-D4 申论字数统计卡
-        // F-D4 申论字数统计卡（按钮放 SECTION 标题行右端，说明文字独占一行，不再互相压盖）
-        {
-            float innerH = m_docxOk ? 96.0f : 88.0f;
-            D2D1_RECT_F cb = flow.block(innerH + 24.0f);
-            m_docxCard = { x0, cb.top + 8.0f, x0 + contentW, cb.top + 8.0f + innerH };
-            float bx = m_docxCard.left + 26.0f, br = m_docxCard.right - 26.0f;
-            m_docxBtnRect    = { br - 176.0f, m_docxCard.top + 12.0f, br, m_docxCard.top + 44.0f };
-            m_docxRevokeRect = { br - 96.0f,  m_docxCard.top + 12.0f, br, m_docxCard.top + 44.0f };
-        }
-
         {
             D2D1_RECT_F endBlock = flow.block(46.0f + 30.0f);
             m_backBtn.bounds = { x0, endBlock.top, x0 + 150.0f, endBlock.top + 46.0f };
@@ -523,66 +510,6 @@ void AchieveView::Update(float dt, const Input& in)
             }
         }
     }
-
-    // F-D4 申论字数：连接 / 撤销（F3 面板内）
-    if (m_tab == 0 && in.clicked) {
-        if (InRect(m_docxBtnRect, mx, my)) OnDocxConnect();
-        if (InRect(m_docxRevokeRect, mx, my)) OnDocxRevoke();
-    }
-}
-
-// ---------------- F-D4 申论字数：授权 + 选文件 / 撤销 ----------------
-void AchieveView::OnDocxConnect()
-{
-    auto& cs = CheckinStore::Instance();
-    auto s = cs.LoadSettings();
-    if (!s.docxEnabled) {
-        int r = MessageBoxW(AppHwnd(),
-            L"芙洛理仅读取你选择的申论文档以统计「字数」，不会上传或留存正文内容。是否授权连接你的申论 Word 草稿？",
-            L"申论字数统计 · 授权", MB_YESNO | MB_ICONINFORMATION);
-        if (r != IDYES) return;
-    }
-    wchar_t path[MAX_PATH] = { 0 };
-    OPENFILENAMEW ofn = { 0 };
-    ofn.lStructSize = sizeof(ofn);
-    ofn.hwndOwner = AppHwnd();
-    ofn.lpstrFilter = L"Word 文档 (*.docx)\0*.docx\0所有文件 (*.*)\0*.*\0";
-    ofn.lpstrFile = path;
-    ofn.nMaxFile = MAX_PATH;
-    ofn.lpstrTitle = L"选择申论文档（仅本地字数统计）";
-    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_EXPLORER;
-    if (!GetOpenFileNameW(&ofn)) return;     // 用户取消
-    s.docxEnabled = true;
-    s.docxPaths.clear();
-    s.docxPaths.push_back(path);
-    cs.SaveSettings(s);
-    Recompute();                              // 刷新显示
-    m_toast = true; m_toastT = 2.5f; m_toastMsg = L"已连接申论文档 ✓";
-}
-
-void AchieveView::OnDocxRevoke()
-{
-    int r = MessageBoxW(AppHwnd(),
-        L"撤销后芙洛理将停止统计该申论文档的字数。确定撤销授权？",
-        L"撤销申论授权", MB_YESNO | MB_ICONQUESTION);
-    if (r != IDYES) return;
-    auto& cs = CheckinStore::Instance();
-    auto s = cs.LoadSettings();
-    s.docxEnabled = false;
-    s.docxPaths.clear();
-    cs.SaveSettings(s);
-    Recompute();
-    m_toast = true; m_toastT = 2.5f; m_toastMsg = L"已撤销申论授权";
-}
-
-void AchieveView::PaintDocxButton(Canvas& cv, const D2D1_RECT_F& r,
-                                  const std::wstring& label, const D2D1_COLOR_F& col)
-{
-    const auto& pal = cv.Pal();
-    cv.FillRoundRect(r, shape::kEdge, col);
-    TextStyle ts; ts.role = FontRole::Sans; ts.size = 12.0f;
-    ts.weight = DWRITE_FONT_WEIGHT_SEMI_BOLD; ts.vAlign = VAlign::Middle;
-    cv.Text(label, { r.left + 12.0f, r.top, r.right, r.bottom }, ts, pal.paperHi);
 }
 
 // ---------------- 绘制 ----------------
@@ -775,26 +702,6 @@ void AchieveView::PaintF3(Canvas& cv)
                          { fx, ly, fr, ly + 18.0f }, as, a.cat == 2 ? pal.brass : pal.ink700);
                 ly += 20.0f;
             }
-        }
-    }
-
-    // F-D4 申论字数统计卡
-    if (m_docxCard.bottom > m_docxCard.top) {
-        cv.FillRoundRect(m_docxCard, shape::kEdge, pal.paperHi);
-        cv.StrokeRoundRect(m_docxCard, shape::kEdge, pal.rule, shape::kHair);
-        float dx = m_docxCard.left + 26.0f, dr = m_docxCard.right - 26.0f;
-        TextStyle fs2; fs2.role = FontRole::Mono; fs2.size = 10.5f; fs2.letterSpacing = 2.0f; fs2.weight = DWRITE_FONT_WEIGHT_BOLD;
-        cv.Text(L"SECTION · 申论字数", { dx, m_docxCard.top + 16.0f, dr, m_docxCard.top + 34.0f }, fs2, pal.ink300);
-        if (!m_docxOk) {
-            TextStyle as; as.role = FontRole::Sans; as.size = 11.0f;
-            cv.Text(L"连接申论 Word 草稿，统计字数（仅本地、不上传正文）。", { dx, m_docxCard.top + 44.0f, dr, m_docxCard.top + 62.0f }, as, pal.ink500);
-            PaintDocxButton(cv, m_docxBtnRect, L"连接申论文档", pal.seal);
-        } else {
-            TextStyle vs; vs.role = FontRole::Mono; vs.size = 14.0f; vs.weight = DWRITE_FONT_WEIGHT_SEMI_BOLD;
-            cv.Text(L"今日写作：" + std::to_wstring(m_docxChars) + L" 字", { dx, m_docxCard.top + 44.0f, dr - 120.0f, m_docxCard.top + 70.0f }, vs, pal.ink900);
-            TextStyle as; as.role = FontRole::Sans; as.size = 10.5f;
-            cv.Text(m_docxFile, { dx, m_docxCard.top + 72.0f, dr - 120.0f, m_docxCard.top + 90.0f }, as, pal.ink500);
-            PaintDocxButton(cv, m_docxRevokeRect, L"撤销", pal.brass);
         }
     }
 
@@ -1029,22 +936,6 @@ void AchieveView::Recompute()
     std::sort(m_todayByApp.begin(), m_todayByApp.end(),
               [](const AppTime& a, const AppTime& b) { return a.min > b.min; });
     m_yearDays = (int)yearDaysSet.size();
-
-    // F-D4 申论字数统计：授权后对各 docx 累加字数（仅本地，正文不出端）
-    m_docxChars = 0; m_docxOk = false; m_docxFile.clear();
-    {
-        auto s = cs.LoadSettings();
-        if (s.docxEnabled && !s.docxPaths.empty()) {
-            int total = 0; bool anyOk = false; std::wstring lastName;
-            for (auto& p : s.docxPaths) {
-                lj::DocxStat r = lj::CountDocxWords(p);
-                if (r.ok) { total += r.chars; anyOk = true; }
-                size_t bs = p.find_last_of(L"/\\");
-                lastName = (bs == std::wstring::npos) ? p : p.substr(bs + 1);
-            }
-            if (anyOk) { m_docxChars = total; m_docxOk = true; m_docxFile = lastName; }
-        }
-    }
 
     // 连续打卡天数（倒推，今日尚未勾选则从昨日计）
     m_streak = 0;
