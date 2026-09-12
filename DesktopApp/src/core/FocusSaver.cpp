@@ -156,14 +156,15 @@ LRESULT FocusSaver::WndProc(UINT msg, WPARAM wp, LPARAM lp)
         return 0;
     }
     case WM_TIMER: {
-        // —— 静止检测：GetCursorPos 屏幕坐标轮询（与窗口形态无关）——
-        POINT pt{};
-        GetCursorPos(&pt);
-        ScreenToClient(m_hwnd, &pt);   // 命中区是客户坐标，顺带转换
+        // —— 静止检测：直接用屏幕坐标比较（关键！）——
+        // 上一版 ScreenToClient 后比较：窗口在胶囊↔全屏变形时同一屏幕点对应的
+        // 客户坐标完全不同 → 封面一弹出就误判「鼠标动了」→ 秒退 → 无限闪烁。
+        POINT spt{};
+        GetCursorPos(&spt);
         if (m_lastPt.x < 0 ||
-            std::fabs((float)pt.x - m_lastPt.x) > 1.0f ||
-            std::fabs((float)pt.y - m_lastPt.y) > 1.0f) {
-            m_lastPt = pt;
+            std::fabs((float)spt.x - m_lastPt.x) > 1.0f ||
+            std::fabs((float)spt.y - m_lastPt.y) > 1.0f) {
+            m_lastPt = spt;
             m_idle = 0.0f;
             if (m_full) { m_full = false; ApplyShape(); }   // 移动 → 缩成胶囊
         } else {
@@ -171,16 +172,18 @@ LRESULT FocusSaver::WndProc(UINT msg, WPARAM wp, LPARAM lp)
             if (!m_full && m_idle >= 5.0f) { m_full = true; ApplyShape(); }   // 静止 5s → 封面
         }
         if (m_volDrag) {
-            float t = (float)(pt.x - m_rVol.left) / (float)(m_rVol.right - m_rVol.left);
+            POINT cpt{ spt.x, spt.y };
+            ScreenToClient(m_hwnd, &cpt);   // 仅音量命中区需要客户坐标
+            float t = (float)(cpt.x - m_rVol.left) / (float)(m_rVol.right - m_rVol.left);
             t = t < 0 ? 0 : (t > 1 ? 1 : t);
             MusicPlayer::Instance().SetVolume(t * t);
         }
         // —— 重绘节流：内容只在秒变化/状态变化时变，平时不重绘 ——
-        // （主线程与软件本体共享；上一版每 100ms 全屏重绘 + 重建大字体把 UI 卡住）
+        // （主线程与软件本体共享；勿高频全屏重绘）
         int sec = m_remain;
         if (sec != m_lastPaintSec) {
             m_lastPaintSec = sec;
-            if (m_hwnd) InvalidateRect(m_hwnd, nullptr, TRUE);
+            if (m_hwnd) InvalidateRect(m_hwnd, nullptr, FALSE);   // FALSE：不擦背景，Paint 自绘全幅
         }
         return 0;
     }
