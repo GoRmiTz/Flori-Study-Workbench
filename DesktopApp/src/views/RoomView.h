@@ -178,6 +178,9 @@ private:
     D2D1_RECT_F m_prevR{};          // 音乐卡 ⏮（批次 B 连播）
     D2D1_RECT_F m_nextR{};          // 音乐卡 ⏭
     D2D1_RECT_F m_dirR{};           // 「选择文件夹」小按钮
+    // 专注记录收起（默认只显示 5 条，可展开全部）
+    bool        m_histExpand = false;
+    D2D1_RECT_F m_histMoreR{};      // 「展开全部 / 收起」按钮
     // 专注覆盖层音乐控制条（批次 B：需求 3 —— 专注界面可调音量/暂停/切歌）
     D2D1_RECT_F m_ovPrev{};  D2D1_RECT_F m_ovPlay{};  D2D1_RECT_F m_ovNext{};
     D2D1_RECT_F m_ovVol{};          // 覆盖层音量滑条

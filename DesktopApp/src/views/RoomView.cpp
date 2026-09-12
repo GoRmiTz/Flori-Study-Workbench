@@ -210,10 +210,18 @@ void RoomView::OpenWhitelist()
 
 void RoomView::DebugForcePreview()
 {
-    // 截图自检：无头模式没有 FocusTracker，用默认名单铺满列表以便目视核对布局
-    OpenWhitelist();
-    if (m_wlApps.empty()) m_wlApps = FocusTracker::DefaultUserApps();
-    m_wlA.Snap(1.0f);
+    // 截图自检：造 12 条示例专注记录，验证记录卡「默认 5 条收起 / 展开全部」布局
+    if (m_history.empty()) {
+        auto now = (long long)std::time(nullptr);
+        const wchar_t* tags[3] = { L"自习", L"行测", L"英语" };
+        for (int i = 0; i < 12; ++i) {
+            FocusSession s;
+            s.start = now - (long long)(i + 1) * 5400;
+            s.min = 25 + (i % 3) * 10;
+            s.tag = tags[i % 3];
+            m_history.push_back(s);
+        }
+    }
 }
 
 // 截图自检：强制进入「专注中」（验证专注覆盖层 + 音乐控制条布局）
@@ -869,7 +877,7 @@ void RoomView::LayoutRoom(const D2D1_RECT_F& area, Canvas& cv)
     // #28 播放控制：note 区右侧 = ⏮ / 播放暂停 / ⏭ + 音量滑条（批次 B 连播按钮组）
     {
         float noteTop = m_musicY + 22.0f;
-        float rightE = m_timerCard.right - 26.0f;
+        float rightE = m_timerCard.right - 44.0f;   // ⏭ 再往里收 18px，不贴卡片边
         // 下一首（最右）
         m_nextR = { rightE - 30.0f, noteTop + 14.0f, rightE, noteTop + 50.0f };
         // 播放/暂停（中，84 宽容纳 图标+两字文本 不换行）
@@ -918,11 +926,20 @@ void RoomView::LayoutRoom(const D2D1_RECT_F& area, Canvas& cv)
     float hy = flow.block((std::max)(m_timerCard.bottom, m_membersCard.bottom) - colTop + 24.0f).bottom;
 
     // 历史卡（整宽）
-    int histRows = (std::min)((int)m_history.size(), 30);
+    // 专注记录卡：默认只展开 5 条，超过则收起并提供「展开全部 / 收起」
+    int histTotal = (int)m_history.size();
+    int histRows = (std::min)(histTotal, 30);
     if (histRows == 0) histRows = 1;
-    float histH = 42.0f + (float)histRows * 30.0f + 16.0f;
+    bool histMore = histTotal > 5;
+    int histShow = (histMore && !m_histExpand) ? 5 : histRows;
+    float histBtnH = histMore ? 30.0f : 0.0f;
+    float histH = 42.0f + (float)histShow * 30.0f + histBtnH + 12.0f;
     m_histCard = { x0, hy, x0 + contentW, hy + histH };
     m_histY = hy + 42.0f;
+    m_histMoreR = histMore
+        ? D2D1_RECT_F{ x0 + 26.0f, m_histY + (float)histShow * 30.0f + 2.0f,
+                       x0 + contentW - 26.0f, m_histY + (float)histShow * 30.0f + 30.0f }
+        : D2D1_RECT_F{ 0, 0, 0, 0 };
     flow.block(histH + 24.0f);
 
     // 公共聊天（整宽）—— 高度随消息数动态
@@ -1085,6 +1102,16 @@ void RoomView::Update(float dt, const Input& in)
             if (hit(m_prevR, in.mouseX, sy)) { MusicPlayer::Instance().Prev(); return; }
             if (hit(m_nextR, in.mouseX, sy)) { MusicPlayer::Instance().Next(); return; }
             if (hit(m_dirR, in.mouseX, sy))  { PickMusicFolder(); return; }
+        }
+    }
+
+    // ---- 专注记录「展开全部 / 收起」（内容坐标命中；Layout 每帧跑，翻转即重排）----
+    if (in.clicked && m_histMoreR.right > m_histMoreR.left) {
+        float sy = in.mouseY + ScrollY();
+        if (in.mouseX >= m_histMoreR.left && in.mouseX <= m_histMoreR.right &&
+            sy >= m_histMoreR.top && sy <= m_histMoreR.bottom) {
+            m_histExpand = !m_histExpand;
+            return;
         }
     }
 
@@ -1472,7 +1499,9 @@ void RoomView::PaintMusic(Canvas& cv)
     hs.weight = DWRITE_FONT_WEIGHT_BOLD;
     cv.Text(m_netLive ? L"SECTION · 背景音乐（实时）" : L"SECTION · 背景音乐（离线）",
             { ix, m_musicY, right, m_musicY + 16.0f }, hs, m_netLive ? pal.jade : pal.ink300);
-    cv.PerforationH(ix + 170.0f, right, m_musicY + 8.0f, WithAlpha(pal.ruleStrong, 0.5f));
+    // 骑缝虚线在「选择文件夹」按钮左侧收住，不再从按钮底下穿过去
+    float perfEnd = (m_dirR.right > m_dirR.left) ? m_dirR.left - 12.0f : right;
+    cv.PerforationH(ix + 170.0f, perfEnd, m_musicY + 8.0f, WithAlpha(pal.ruleStrong, 0.5f));
 
     D2D1_RECT_F note{ ix, m_musicY + 22.0f, right, m_musicY + 22.0f + 64.0f };
     cv.FillRoundRect(note, shape::kEdgeSoft, WithAlpha(pal.brassWash, pal.dark ? 0.5f : 0.7f));
@@ -1587,14 +1616,16 @@ void RoomView::PaintHistory(Canvas& cv)
     float right = m_histCard.right - 26.0f;
     TextStyle ts; ts.role = FontRole::Mono; ts.size = 10.5f; ts.letterSpacing = 2.0f;
     ts.weight = DWRITE_FONT_WEIGHT_BOLD;
-    cv.Text(L"SECTION · 近 30 条专注记录", { ix, m_histCard.top + 20.0f, right, m_histCard.top + 36.0f }, ts, pal.ink300);
+    cv.Text(L"SECTION · 专注记录", { ix, m_histCard.top + 20.0f, right, m_histCard.top + 36.0f }, ts, pal.ink300);
 
     if (m_history.empty()) {
         TextStyle et; et.role = FontRole::Sans; et.size = 12.5f; et.vAlign = VAlign::Middle;
         cv.Text(L"还没有专注记录。开始一次专注，时长会自动计入档案。",
                 { ix, m_histY, right, m_histCard.bottom - 16.0f }, et, pal.ink500);
     } else {
-        int rows = (std::min)((int)m_history.size(), (int)((m_histCard.bottom - m_histY - 8.0f) / 30.0f));
+        // 与 Layout 保持一致：未展开只画前 5 条
+        int histTotal = (int)m_history.size();
+        int rows = (histTotal > 5 && !m_histExpand) ? 5 : (std::min)(histTotal, 30);
         for (int i = 0; i < rows; ++i) {
             const auto& s = m_history[i];
             float ry = m_histY + (float)i * 30.0f;
@@ -1604,7 +1635,18 @@ void RoomView::PaintHistory(Canvas& cv)
             swprintf_s(rb, L"%s · %d 分钟", s.tag.c_str(), s.min);
             TextStyle rt; rt.role = FontRole::Sans; rt.size = 11.5f; rt.vAlign = VAlign::Middle; rt.hAlign = HAlign::Right;
             cv.Text(rb, { right - 220.0f, ry, right, ry + 26.0f }, rt, pal.ink500);
-            if (i < rows - 1) cv.Line(ix, ry + 27.0f, right, ry + 27.0f, WithAlpha(pal.rule, 0.5f), 1.0f);
+            if (i < rows - 1 || m_histMoreR.right > m_histMoreR.left)
+                cv.Line(ix, ry + 27.0f, right, ry + 27.0f, WithAlpha(pal.rule, 0.5f), 1.0f);
+        }
+
+        // 「展开全部 N 条 ▾ / 收起 ▴」按钮（居中胶囊）
+        if (m_histMoreR.right > m_histMoreR.left) {
+            wchar_t mb[48];
+            swprintf_s(mb, m_histExpand ? L"收起 ▴" : L"展开全部 %d 条 ▾", histTotal);
+            cv.StrokeRoundRect(m_histMoreR, 15.0f, WithAlpha(pal.rule, 0.9f), shape::kHair);
+            TextStyle ms; ms.role = FontRole::Sans; ms.size = 11.5f; ms.vAlign = VAlign::Middle;
+            ms.hAlign = HAlign::Center;
+            cv.Text(mb, m_histMoreR, ms, pal.ink700);
         }
     }
     cv.PopOpacity();
