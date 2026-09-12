@@ -17,6 +17,8 @@ struct Input
     bool  released = false;     // 本帧抬起
     bool  clicked = false;      // 本帧完成一次点击
 
+    bool  rClicked = false;     // G9：本帧右键完成一次点击（右键菜单）
+
     float wheel = 0.0f;         // 本帧滚轮增量（正=向下滚）
     float dt = 0.0f;
     float time = 0.0f;
@@ -28,6 +30,7 @@ struct Input
     {
         prevX = mouseX; prevY = mouseY;
         pressed = released = clicked = false;
+        rClicked = false;
         wheel = 0.0f;
         memset(keyDown, 0, sizeof(keyDown));
     }

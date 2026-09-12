@@ -8,6 +8,7 @@
 #include "ui/FieldEdit.h"
 #include "quiz/BoxStore.h"
 #include <vector>
+#include <tuple>
 
 namespace lj {
 
@@ -65,6 +66,10 @@ private:
     float m_nebDragX = 0.0f, m_nebDragY = 0.0f;
     float m_dragStartX = 0.0f, m_dragStartY = 0.0f;
     int   m_nebDropBox = -1;
+    // G9 N2 拖拽创新：聚焦态下方恒星带 → 跨题集拖拽
+    int   m_dragGuest = -1;           // 悬停的未聚焦题集索引（-1 无）
+    float m_guestScale = 0.0f;        // guest 恒星放大插值
+    D2D1_POINT_2F m_guestAnchor{};    // guest 轨道系统锚点（画面右侧）
     void DrawNebula(Canvas& cv, float s);
 
     // ---- 侧边栏（G6 T11）----
@@ -88,6 +93,39 @@ private:
     void ApplySearch();
     void EnterShowMode();
     void DrawSidebar(Canvas& cv);
+
+    // ---- G9：N8 右键菜单（改难度渐变/移动至飞行/改名/删除破碎）----
+    bool  m_menuOpen = false;
+    int   m_menuMode = 0;             // 0=主菜单 1=移动至子菜单
+    int   m_menuSet = -1, m_menuBox = -1, m_menuCard = -1;
+    float m_menuT = 1.0f;             // 淡入
+    D2D1_POINT_2F m_menuPos{};
+    D2D1_RECT_F m_menuPanel{}, m_menuDiffR[5]{}, m_menuMoveR{}, m_menuRenR{}, m_menuDelR{};
+    std::vector<std::tuple<std::wstring, int, int>> m_menuTargets;  // (显示名, setIdx, boxIdx)
+    std::vector<D2D1_RECT_F> m_menuTargetR;
+    // 动效状态
+    int   m_gradSet = -1, m_gradBox = -1, m_gradCard = -1;   // 改难度渐变
+    int   m_gradFrom = 3, m_gradTo = 3;
+    float m_gradT = 1.0f;
+    // 飞行（移动至）
+    bool  m_flyOpen = false;
+    int   m_flySet = -1, m_flyBox = -1, m_flyCard = -1;
+    float m_flyT = 1.0f;
+    D2D1_POINT_2F m_flyFrom{}, m_flyTo{};
+    std::wstring m_flyFromId, m_flyCardId, m_flyToId;
+    // 破碎（删除）
+    bool  m_shatterOpen = false;
+    float m_shatterT = 1.0f;
+    D2D1_POINT_2F m_shatterPos{};
+    D2D1_COLOR_F m_shatterCol{};
+    struct Shard { float vx, vy, rot; };
+    std::vector<Shard> m_shards;
+    void OpenMenu(int setIdx, int boxIdx, int cardIdx, float x, float y);
+    void DrawMenu(Canvas& cv);
+    void MenuActionDiff(int d);
+    void MenuActionMove(int targetIdx);
+    void MenuActionDelete();
+    D2D1_COLOR_F pal_shatter_col(int si, int bi, int ci);
 
     // ---- N4：展开卡 ----
     bool  m_expOpen = false;

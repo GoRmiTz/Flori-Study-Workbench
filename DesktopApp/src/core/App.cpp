@@ -437,6 +437,9 @@ void App::HandleInput(UINT msg, WPARAM wp, LPARAM lp)
         m_input.released = true;
         m_input.pressed = false;
         break;
+    case WM_RBUTTONUP:
+        m_input.rClicked = true;   // G9：右键菜单
+        break;
     case WM_MOUSEWHEEL:
         // 取反：OS 向上滚给正增量，而视图层约定「wheel 正 = 向下滚」，
         // 不取反会导致「往下翻要往上滚」。每格 ±1.0，倍率由 View::Update 控制。

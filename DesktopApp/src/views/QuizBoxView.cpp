@@ -427,6 +427,22 @@ void QuizBoxView::DrawNebula(Canvas& cv, float s)
             dc2.g = dc2.g + (pal.vermilion.g - dc2.g) * heat;
             dc2.b = dc2.b + (pal.vermilion.b - dc2.b) * heat;
         }
+        // G9 N8：改难度颜色渐变（旧色→新色 300ms lerp）
+        if (m_gradT < 1.0f && m_gradSet == nc.setIdx && m_gradBox == nc.boxIdx && m_gradCard == nc.cardIdx) {
+            auto dfc = [&](int d) -> D2D1_COLOR_F {
+                switch (d) {
+                case 1: case 2: return pal.jade;
+                case 3: return pal.brass;
+                case 4: return pal.seal;
+                default: return pal.vermilion;
+                }
+            };
+            D2D1_COLOR_F from = dfc(m_gradFrom), to = dfc(m_gradTo);
+            float gt = Clamp01(m_gradT / 0.3f);
+            dc2.r = from.r + (to.r - from.r) * gt;
+            dc2.g = from.g + (to.g - from.g) * gt;
+            dc2.b = from.b + (to.b - from.b) * gt;
+        }
 
         bool lit = (hoverDiff == cd.difficulty);
         bool self = (m_hoverNeb == idx);
@@ -518,8 +534,69 @@ void QuizBoxView::DrawNebula(Canvas& cv, float s)
         TextStyle fp; fp.size = 10.0f; fp.role = FontRole::Mono;
         fp.hAlign = HAlign::Center;
         cv.Text(L"聚焦中 · 点击恒星返回全览",
-                { m_area.left + 28.0f, m_area.bottom - 34.0f, m_area.left + 400.0f, m_area.bottom - 16.0f },
+                { m_area.left + 28.0f, m_area.bottom - 90.0f, m_area.left + 400.0f, m_area.bottom - 72.0f },
                 fp, pal.ink300);
+    }
+
+    // ---- G9 N2 拖拽创新：聚焦态底部恒星带 + 悬停恒星右侧展开 guest 轨道 ----
+    if (m_nebDrag && m_focusSet >= 0 && m_focusSet < (int)m_sets.size()) {
+        if (m_dragGuest >= 0 && m_dragGuest < (int)m_sets.size()) {
+            const auto& gst = m_sets[m_dragGuest];
+            float ga = Clamp01(m_guestScale);
+            cv.PushOpacity(ga * 0.9f);
+            for (int bi = 0; bi < (int)gst.boxes.size(); ++bi) {
+                float rx = 130.0f + bi * 54.0f;
+                float ry = rx * 0.30f;
+                bool hot = (m_nebDropBox == bi);
+                cv.StrokeEllipse(m_guestAnchor.x, m_guestAnchor.y, rx, ry,
+                                 hot ? WithAlpha(pal.seal, 0.95f) : WithAlpha(pal.rule, 0.6f),
+                                 hot ? 2.0f : 1.0f);
+                if (hot) {
+                    TextStyle lt; lt.size = 11.0f; lt.role = FontRole::Mono;
+                    lt.vAlign = VAlign::Middle;
+                    cv.Text(gst.boxes[bi].name,
+                            { m_guestAnchor.x + rx + 6.0f, m_guestAnchor.y - 9.0f,
+                              m_guestAnchor.x + rx + 150.0f, m_guestAnchor.y + 9.0f },
+                            lt, pal.seal);
+                }
+            }
+            DrawHouse(cv, { m_guestAnchor.x - 26.0f * ga, m_guestAnchor.y - 36.0f * ga,
+                            m_guestAnchor.x + 26.0f * ga, m_guestAnchor.y + 22.0f * ga },
+                      pal.seal);
+            TextStyle gn; gn.role = FontRole::Serif; gn.size = 13.0f;
+            gn.weight = DWRITE_FONT_WEIGHT_BOLD; gn.hAlign = HAlign::Center; gn.vAlign = VAlign::Top;
+            cv.Text(gst.name, { m_guestAnchor.x - 80.0f, m_guestAnchor.y + 26.0f,
+                                m_guestAnchor.x + 80.0f, m_guestAnchor.y + 48.0f }, gn, pal.ink900);
+            cv.PopOpacity();
+        }
+        float bandY = m_area.bottom - 60.0f;
+        int guestN = 0;
+        for (size_t si = 0; si < m_sets.size(); ++si)
+            if ((int)si != m_focusSet) ++guestN;
+        if (guestN > 0) {
+            float gx0 = m_area.left + (m_area.right - m_area.left - (float)guestN * 100.0f) * 0.5f;
+            cv.FillRoundRect({ gx0 - 14.0f, bandY - 40.0f,
+                               gx0 + (float)guestN * 100.0f + 14.0f, bandY + 44.0f },
+                             8.0f, WithAlpha(pal.paperHi, 0.92f));
+            cv.StrokeRoundRect({ gx0 - 14.0f, bandY - 40.0f,
+                                 gx0 + (float)guestN * 100.0f + 14.0f, bandY + 44.0f },
+                               8.0f, WithAlpha(pal.seal, 0.6f), shape::kHair);
+            TextStyle bt2; bt2.size = 10.0f; bt2.role = FontRole::Mono;
+            bt2.hAlign = HAlign::Center; bt2.vAlign = VAlign::Middle;
+            int gi = 0;
+            for (size_t si = 0; si < m_sets.size(); ++si) {
+                if ((int)si == m_focusSet) continue;
+                float sc = (m_dragGuest == (int)si) ? 1.25f : 1.0f;
+                DrawHouse(cv, { gx0 + gi * 100.0f + 33.0f - 20.0f * sc, bandY - 26.0f * sc,
+                                gx0 + gi * 100.0f + 33.0f + 20.0f * sc, bandY + 10.0f * sc },
+                          m_dragGuest == (int)si ? pal.seal : WithAlpha(pal.seal, 0.7f));
+                cv.Text(m_sets[si].name,
+                        { gx0 + gi * 100.0f + 5.0f, bandY + 14.0f,
+                          gx0 + gi * 100.0f + 61.0f, bandY + 32.0f }, bt2,
+                        m_dragGuest == (int)si ? pal.ink900 : pal.ink500);
+                ++gi;
+            }
+        }
     }
 
     cv.PopOpacity();
@@ -903,6 +980,15 @@ void QuizBoxView::Update(float dt, const Input& in)
     float s = ScrollY();
     float mx = in.mouseX, my = in.mouseY + s;
 
+    // G9 特效计时
+    if (m_menuT < 1.0f) m_menuT += dt;
+    if (m_gradT < 1.0f) m_gradT += dt;
+    if (m_flyT < 1.0f) m_flyT += dt;
+    if (m_shatterOpen) {
+        m_shatterT += dt;
+        if (m_shatterT > 0.6f) m_shatterOpen = false;
+    }
+
     // G4 导入预览弹窗独占
     if (m_impOpen) {
         if (in.clicked) {
@@ -935,6 +1021,42 @@ void QuizBoxView::Update(float dt, const Input& in)
             if (!InRect(m_ceCard, mx, my)) { CeCancel(); return; }
         }
         if (in.keyDown[VK_ESCAPE]) { CeCancel(); return; }
+        return;
+    }
+
+    // ---- G9 N8：右键菜单独占 ----
+    if (m_menuOpen) {
+        m_menuT += dt;
+        if (in.clicked) {
+            if (m_menuMode == 0) {
+                for (int d = 0; d < 5; ++d)
+                    if (InRect(m_menuDiffR[d], mx, my)) { MenuActionDiff(d + 1); return; }
+                if (InRect(m_menuMoveR, mx, my)) { m_menuMode = 1; m_menuT = 0.0f; return; }
+                if (InRect(m_menuRenR, mx, my)) {
+                    // 改名 = 制卡弹窗回填（front 即卡片名）
+                    if (m_menuSet >= 0 && m_menuSet < (int)m_sets.size()) {
+                        const auto& st9 = m_sets[m_menuSet];
+                        if (m_menuBox >= 0 && m_menuBox < (int)st9.boxes.size()
+                            && m_menuCard >= 0 && m_menuCard < (int)st9.boxes[m_menuBox].cards.size()) {
+                            const QCard& cd9 = st9.boxes[m_menuBox].cards[m_menuCard];
+                            std::wstring boxId = st9.boxes[m_menuBox].id;
+                            m_menuOpen = false;
+                            OpenCardEditor(&cd9, boxId);
+                        }
+                    }
+                    return;
+                }
+                if (InRect(m_menuDelR, mx, my)) { MenuActionDelete(); return; }
+            } else {
+                for (size_t i = 0; i < m_menuTargetR.size(); ++i)
+                    if (InRect(m_menuTargetR[i], mx, my)) { MenuActionMove((int)i); return; }
+                // 点「移动至」标题区返回主菜单
+                if (InRect(m_menuPanel, mx, my)) { m_menuMode = 0; m_menuT = 0.0f; return; }
+            }
+            if (!InRect(m_menuPanel, mx, my)) m_menuOpen = false;   // 点外关闭
+            return;
+        }
+        if (in.keyDown[VK_ESCAPE]) { m_menuOpen = false; return; }
         return;
     }
 
@@ -1039,14 +1161,49 @@ void QuizBoxView::Update(float dt, const Input& in)
         if (m_nebDrag) {
             m_nebDragX = wx; m_nebDragY = wy;
             m_nebDropBox = -1;
-            // 椭圆带命中（按所属题集局部坐标）
-            if (m_nebDragIdx >= 0 && m_nebDragIdx < (int)m_nebCards.size()) {
+
+            // G9 N2 拖拽创新：聚焦态 → 底部弹出未聚焦题集恒星带，
+            // 悬停恒星放大并移到右侧展开轨道 → 可直接拽到其轨道跨题集移动
+            m_dragGuest = -1;
+            if (m_focusSet >= 0 && m_focusSet < (int)m_sets.size()) {
+                float bandY = m_area.bottom - 60.0f;
+                int guestN = 0;
+                for (size_t si = 0; si < m_sets.size(); ++si)
+                    if ((int)si != m_focusSet) ++guestN;
+                if (guestN > 0) {
+                    float gx0 = m_area.left + (m_area.right - m_area.left - (float)guestN * 100.0f) * 0.5f;
+                    int gi = 0;
+                    for (size_t si = 0; si < m_sets.size(); ++si) {
+                        if ((int)si == m_focusSet) continue;
+                        D2D1_RECT_F g{ gx0 + gi * 100.0f, bandY - 30.0f,
+                                       gx0 + gi * 100.0f + 90.0f, bandY + 34.0f };
+                        if (wx >= g.left && wx <= g.right && wy >= g.top && wy <= g.bottom) {
+                            m_dragGuest = (int)si;
+                            m_guestAnchor = { m_area.right - 300.0f,
+                                              (m_area.top + m_area.bottom) * 0.5f };
+                        }
+                        ++gi;
+                    }
+                }
+            }
+            m_guestScale += ((m_dragGuest >= 0 ? 1.0f : 0.0f) - m_guestScale) * (std::min)(1.0f, dt * 8.0f);
+
+            // drop 判定：优先 guest 轨道（悬停恒星时右侧展开），否则本题集轨道
+            if (m_dragGuest >= 0) {
+                const auto& gst = m_sets[m_dragGuest];
+                for (int bi = 0; bi < (int)gst.boxes.size(); ++bi) {
+                    float rx = 130.0f + bi * 54.0f;
+                    float ry = rx * 0.30f;
+                    float v = ((wx - m_guestAnchor.x) / rx) * ((wx - m_guestAnchor.x) / rx)
+                            + ((wy - m_guestAnchor.y) / ry) * ((wy - m_guestAnchor.y) / ry);
+                    if (v > 0.55f && v < 1.5f) { m_nebDropBox = bi; break; }
+                }
+            } else if (m_nebDragIdx >= 0 && m_nebDragIdx < (int)m_nebCards.size()) {
                 const auto& dc0 = m_nebCards[m_nebDragIdx];
                 if (dc0.setIdx >= 0 && dc0.setIdx < (int)m_sets.size()) {
                     const auto& st5 = m_sets[dc0.setIdx];
                     D2D1_POINT_2F ctr{ (m_area.left + m_area.right) * 0.5f,
-                                       (m_area.top + m_area.bottom) * 0.5f + m_area.top * 0.0f };
-                    // v3：恒星中心取 SetCenters 结果（聚焦态单中心）
+                                       (m_area.top + m_area.bottom) * 0.5f };
                     if (!m_setCenters.empty()) ctr = m_setCenters.front();
                     for (int bi = 0; bi < (int)st5.boxes.size(); ++bi) {
                         float rx = (m_focusSet >= 0 ? 150.0f : 92.0f) + bi * 58.0f;
@@ -1067,13 +1224,25 @@ void QuizBoxView::Update(float dt, const Input& in)
                             && nc5.cardIdx >= 0 && nc5.cardIdx < (int)st5.boxes[nc5.boxIdx].cards.size()) {
                             const auto& fromId = st5.boxes[nc5.boxIdx].id;
                             const auto& cardId = st5.boxes[nc5.boxIdx].cards[nc5.cardIdx].id;
-                            if (m_focusSet >= 0 && m_focusSet < (int)m_sets.size()) {
+                            // G9：跨题集（guest 恒星轨道落盒）
+                            if (m_dragGuest >= 0 && m_dragGuest < (int)m_sets.size()) {
+                                const auto& gst = m_sets[m_dragGuest];
+                                if (m_nebDropBox < (int)gst.boxes.size()) {
+                                    const auto& toId = gst.boxes[m_nebDropBox].id;
+                                    if (fromId != toId) {
+                                        BoxStore::Instance().MoveCard(fromId, cardId, toId);
+                                        AfterTreeChange();
+                                        Toast(L"已移至题集「" + gst.name + L"」· " + gst.boxes[m_nebDropBox].name);
+                                        moved = true;
+                                    }
+                                }
+                            } else if (m_focusSet >= 0 && m_focusSet < (int)m_sets.size()) {
                                 const auto& stT = m_sets[m_focusSet];
                                 if (m_nebDropBox < (int)stT.boxes.size()) {
                                     const auto& toId = stT.boxes[m_nebDropBox].id;
                                     if (fromId != toId) {
                                         BoxStore::Instance().MoveCard(fromId, cardId, toId);
-                                        AfterTreeChange();   // N2 崩溃防线：清缓存
+                                        AfterTreeChange();
                                         Toast(L"已归入：" + stT.boxes[m_nebDropBox].name);
                                         moved = true;
                                     }
@@ -1084,6 +1253,7 @@ void QuizBoxView::Update(float dt, const Input& in)
                 }
                 (void)moved;
                 m_nebDrag = false; m_nebDragIdx = -1; m_nebDropBox = -1;
+                m_dragGuest = -1;
             }
             return;   // 拖拽中独占
         }
@@ -1101,6 +1271,15 @@ void QuizBoxView::Update(float dt, const Input& in)
         }
     }
     if (m_hoverNeb < 0) m_orbit += dt * 0.10f;
+
+    // G9 N8：右键小卡 → 菜单
+    if (in.rClicked) {
+        if (m_hoverNeb >= 0 && m_hoverNeb < (int)m_nebCards.size()) {
+            const auto& nc9 = m_nebCards[m_hoverNeb];
+            OpenMenu(nc9.setIdx, nc9.boxIdx, nc9.cardIdx, in.mouseX, in.mouseY);
+        }
+        return;
+    }
 
     if (!in.clicked) return;
 
@@ -1247,6 +1426,184 @@ void QuizBoxView::EnterShowMode()
 }
 
 // ============================================================
+//  G9 N8：右键菜单（改难度渐变 / 移动至飞行 / 改名 / 删除破碎）
+// ============================================================
+void QuizBoxView::OpenMenu(int setIdx, int boxIdx, int cardIdx, float x, float y)
+{
+    m_menuOpen = true;
+    m_menuMode = 0;
+    m_menuSet = setIdx; m_menuBox = boxIdx; m_menuCard = cardIdx;
+    m_menuPos = { x, y };
+    m_menuT = 0.0f;
+    // 移动至目标：全部题集的全部盒（排除自身）
+    m_menuTargets.clear();
+    for (size_t si = 0; si < m_sets.size(); ++si)
+        for (size_t bi = 0; bi < m_sets[si].boxes.size(); ++bi) {
+            if ((int)si == setIdx && (int)bi == boxIdx) continue;
+            wchar_t nm[96];
+            swprintf_s(nm, L"%s · %s", m_sets[si].name.c_str(), m_sets[si].boxes[bi].name.c_str());
+            m_menuTargets.push_back({ nm, (int)si, (int)bi });
+        }
+}
+
+void QuizBoxView::MenuActionDiff(int d)
+{
+    if (m_menuSet < 0 || m_menuSet >= (int)m_sets.size()) return;
+    const auto& st = m_sets[m_menuSet];
+    if (m_menuBox < 0 || m_menuBox >= (int)st.boxes.size()) return;
+    if (m_menuCard < 0 || m_menuCard >= (int)st.boxes[m_menuBox].cards.size()) return;
+    QCard c = st.boxes[m_menuBox].cards[m_menuCard];
+    if (c.difficulty == d) { m_menuOpen = false; return; }
+    m_gradSet = m_menuSet; m_gradBox = m_menuBox; m_gradCard = m_menuCard;
+    m_gradFrom = c.difficulty; m_gradTo = d;
+    m_gradT = 0.0f;                          // 边框颜色渐变动效（300ms）
+    c.difficulty = d;
+    BoxStore::Instance().UpdateCard(st.boxes[m_menuBox].id, c);
+    AfterTreeChange();
+    m_menuOpen = false;
+}
+
+void QuizBoxView::MenuActionMove(int targetIdx)
+{
+    if (targetIdx < 0 || targetIdx >= (int)m_menuTargets.size()) return;
+    auto [nm, tsi, tbi] = m_menuTargets[targetIdx];
+    if (m_menuSet < 0 || m_menuSet >= (int)m_sets.size()) return;
+    const auto& st = m_sets[m_menuSet];
+    if (m_menuBox < 0 || m_menuBox >= (int)st.boxes.size()) return;
+    if (m_menuCard < 0 || m_menuCard >= (int)st.boxes[m_menuBox].cards.size()) return;
+    // 飞行动效：从卡片当前位置飞向目标轨道点（0.5s）后落盒
+    if (m_nebDragIdx >= 0 && m_nebDragIdx < (int)m_nebCards.size()) {
+        m_flyFrom = m_nebCards[m_nebDragIdx].pos;
+    } else {
+        m_flyFrom = { (m_area.left + m_area.right) * 0.5f, (m_area.top + m_area.bottom) * 0.5f };
+    }
+    // 目标轨道点：目标盒轨道最右点
+    float baseRx = 150.0f + tbi * 58.0f;
+    m_flyTo = { (m_area.left + m_area.right) * 0.5f + baseRx,
+                (m_area.top + m_area.bottom) * 0.52f };
+    m_flySet = m_menuSet; m_flyBox = m_menuBox; m_flyCard = m_menuCard;
+    m_flyFromId = st.boxes[m_menuBox].id;
+    m_flyCardId = st.boxes[m_menuBox].cards[m_menuCard].id;
+    m_flyToId = m_sets[tsi].boxes[tbi].id;
+    m_flyT = 0.0f;
+    m_menuOpen = false;
+}
+
+void QuizBoxView::MenuActionDelete()
+{
+    if (m_menuSet < 0 || m_menuSet >= (int)m_sets.size()) return;
+    const auto& st = m_sets[m_menuSet];
+    if (m_menuBox < 0 || m_menuBox >= (int)st.boxes.size()) return;
+    if (m_menuCard < 0 || m_menuCard >= (int)st.boxes[m_menuBox].cards.size()) return;
+    // 破碎动效：8 片小方块四散（视觉先行，数据立即删）
+    m_shatterPos = m_nebCards.empty() ? D2D1_POINT_2F{ (m_area.left + m_area.right) * 0.5f,
+                                                        (m_area.top + m_area.bottom) * 0.5f }
+                                       : m_nebCards[m_hoverNeb >= 0 ? m_hoverNeb : 0].pos;
+    m_shatterCol = pal_shatter_col(m_menuSet, m_menuBox, m_menuCard);
+    m_shards.clear();
+    for (int i = 0; i < 8; ++i) {
+        float ang = 6.2831853f * (float)i / 8.0f + 0.3f;
+        m_shards.push_back({ std::cos(ang) * (60.0f + 40.0f * (i % 3)),
+                             std::sin(ang) * (60.0f + 40.0f * (i % 3)) - 40.0f,
+                             (float)(i % 2 ? 1 : -1) * (2.0f + (float)(i % 3)) });
+    }
+    m_shatterT = 0.0f;
+    m_shatterOpen = true;
+    BoxStore::Instance().DeleteCard(st.boxes[m_menuBox].id,
+                                    st.boxes[m_menuBox].cards[m_menuCard].id);
+    AfterTreeChange();
+    m_menuOpen = false;
+    Toast(L"已删除卡片");
+}
+
+// 破碎碎片颜色（取卡片难度色）
+D2D1_COLOR_F QuizBoxView::pal_shatter_col(int si, int bi, int ci)
+{
+    if (si < 0 || si >= (int)m_sets.size()) return D2D1_COLOR_F{ 0.6f, 0.3f, 0.3f, 1.0f };
+    const auto& st = m_sets[si];
+    if (bi < 0 || bi >= (int)st.boxes.size()) return D2D1_COLOR_F{ 0.6f, 0.3f, 0.3f, 1.0f };
+    if (ci < 0 || ci >= (int)st.boxes[bi].cards.size()) return D2D1_COLOR_F{ 0.6f, 0.3f, 0.3f, 1.0f };
+    int d = st.boxes[bi].cards[ci].difficulty;
+    switch (d) {
+    case 1: case 2: return m_cv ? m_cv->Pal().jade : D2D1_COLOR_F{ 0.4f, 0.5f, 0.4f, 1.0f };
+    case 3: return m_cv ? m_cv->Pal().brass : D2D1_COLOR_F{ 0.6f, 0.5f, 0.3f, 1.0f };
+    case 4: return m_cv ? m_cv->Pal().seal : D2D1_COLOR_F{ 0.7f, 0.35f, 0.35f, 1.0f };
+    default: return m_cv ? m_cv->Pal().vermilion : D2D1_COLOR_F{ 0.8f, 0.3f, 0.3f, 1.0f };
+    }
+}
+
+void QuizBoxView::DrawMenu(Canvas& cv)
+{
+    const auto& pal = cv.Pal();
+    float a = Clamp01(m_menuT / 0.18f);
+    cv.PushOpacity(a);
+
+    if (m_menuMode == 0) {
+        // 主菜单：难度 D1-D5 横排 + 移动至 / 改名 / 删除
+        float mw = 250.0f, mh = 150.0f;
+        float px = m_menuPos.x, py = m_menuPos.y;
+        if (px + mw > m_area.right - 290.0f) px = m_menuPos.x - mw - 8.0f;
+        if (py + mh > m_area.bottom - 12.0f) py = m_area.bottom - mh - 12.0f;
+        m_menuPanel = { px, py, px + mw, py + mh };
+        cv.FillRoundRect(m_menuPanel, 6.0f, pal.paperHi);
+        cv.StrokeRoundRect(m_menuPanel, 6.0f, WithAlpha(pal.seal, 0.8f), shape::kHair);
+        TextStyle lb; lb.role = FontRole::Mono; lb.size = 10.0f; lb.letterSpacing = 1.6f;
+        lb.weight = DWRITE_FONT_WEIGHT_BOLD;
+        cv.Text(L"难度", { px + 14.0f, py + 10.0f, px + mw - 14.0f, py + 26.0f }, lb, pal.ink500);
+        auto dc = [&](int d) -> D2D1_COLOR_F {
+            switch (d) {
+            case 1: case 2: return pal.jade;
+            case 3: return pal.brass;
+            case 4: return pal.seal;
+            default: return pal.vermilion;
+            }
+        };
+        for (int d = 0; d < 5; ++d) {
+            m_menuDiffR[d] = { px + 14.0f + d * 46.0f, py + 28.0f,
+                               px + 14.0f + d * 46.0f + 40.0f, py + 56.0f };
+            cv.FillRoundRect(m_menuDiffR[d], 5.0f, WithAlpha(dc(d + 1), 0.15f));
+            cv.StrokeRoundRect(m_menuDiffR[d], 5.0f, dc(d + 1), shape::kHair);
+            TextStyle dt; dt.size = 12.0f; dt.role = FontRole::Mono;
+            dt.hAlign = HAlign::Center; dt.vAlign = VAlign::Middle;
+            wchar_t db[8]; swprintf_s(db, L"D%d", d + 1);
+            cv.Text(db, m_menuDiffR[d], dt, dc(d + 1));
+        }
+        float iy = py + 66.0f;
+        m_menuMoveR = { px + 14.0f, iy, px + mw - 14.0f, iy + 24.0f };
+        m_menuRenR  = { px + 14.0f, iy + 26.0f, px + mw - 14.0f, iy + 50.0f };
+        m_menuDelR  = { px + 14.0f, iy + 52.0f, px + mw - 14.0f, iy + 76.0f };
+        TextStyle it; it.size = 12.5f; it.role = FontRole::Sans; it.vAlign = VAlign::Middle;
+        cv.Text(L"移动至", m_menuMoveR, it, pal.ink700);
+        cv.Text(L"改名", m_menuRenR, it, pal.ink700);
+        cv.Text(L"删除", m_menuDelR, it, pal.vermilion);
+    } else {
+        // 移动至子菜单：目标盒列表
+        float mw = 280.0f;
+        float mh = 40.0f + (std::min)(8, (int)m_menuTargets.size()) * 28.0f + 12.0f;
+        float px = m_menuPos.x, py = m_menuPos.y;
+        if (px + mw > m_area.right - 290.0f) px = m_menuPos.x - mw - 8.0f;
+        if (py + mh > m_area.bottom - 12.0f) py = m_area.bottom - mh - 12.0f;
+        m_menuPanel = { px, py, px + mw, py + mh };
+        cv.FillRoundRect(m_menuPanel, 6.0f, pal.paperHi);
+        cv.StrokeRoundRect(m_menuPanel, 6.0f, WithAlpha(pal.seal, 0.8f), shape::kHair);
+        TextStyle lb; lb.role = FontRole::Mono; lb.size = 10.0f; lb.letterSpacing = 1.6f;
+        lb.weight = DWRITE_FONT_WEIGHT_BOLD;
+        cv.Text(L"移动至", { px + 14.0f, py + 10.0f, px + mw - 14.0f, py + 26.0f }, lb, pal.seal);
+        m_menuTargetR.clear();
+        int n = (std::min)(8, (int)m_menuTargets.size());
+        for (int i = 0; i < n; ++i) {
+            D2D1_RECT_F r{ px + 14.0f, py + 32.0f + (float)i * 28.0f,
+                           px + mw - 14.0f, py + 56.0f + (float)i * 28.0f };
+            m_menuTargetR.push_back(r);
+            TextStyle it; it.size = 12.0f; it.role = FontRole::Sans; it.vAlign = VAlign::Middle;
+            cv.Text(std::get<0>(m_menuTargets[i]), { r.left + 6.0f, r.top, r.right, r.bottom },
+                    it, pal.ink700);
+        }
+    }
+    cv.PopOpacity();
+}
+
+// ============================================================
 //  绘制入口
 // ============================================================
 void QuizBoxView::Paint(Canvas& cv)
@@ -1321,8 +1678,51 @@ void QuizBoxView::Paint(Canvas& cv)
     DrawNebula(cv, s);
     DrawSidebar(cv);
 
+    // ---- G9 特效层 ----
+    // 移动至：飞行卡（From→To 插值 + 缩小 + 淡出）
+    if (m_flyT < 1.0f) {
+        float t = Clamp01(m_flyT / 0.5f);
+        float e2 = ease::OutCubic(t);
+        float fx = m_flyFrom.x + (m_flyTo.x - m_flyFrom.x) * e2;
+        float fy = m_flyFrom.y + (m_flyTo.y - m_flyFrom.y) * e2 - 40.0f * std::sin(3.1415926f * t);
+        float sc = 1.2f - 0.7f * e2;
+        D2D1_RECT_F r{ fx - 12.0f * sc, fy - 15.0f * sc, fx + 12.0f * sc, fy + 15.0f * sc };
+        cv.PushOpacity(1.0f - t * 0.4f);
+        cv.FillRoundRect(r, 3.0f, pal.paperHi);
+        cv.StrokeRoundRect(r, 3.0f, pal.seal, 1.6f);
+        cv.PopOpacity();
+        // 落点涟漪
+        if (t > 0.85f) {
+            float rr = (t - 0.85f) / 0.15f;
+            cv.PushOpacity(1.0f - rr);
+            cv.StrokeEllipse(m_flyTo.x, m_flyTo.y, 20.0f + rr * 40.0f,
+                             (20.0f + rr * 40.0f) * 0.3f, WithAlpha(pal.seal, 0.8f), 1.5f);
+            cv.PopOpacity();
+        }
+    }
+    // 删除：破碎碎片（四散 + 淡出 + 旋转）
+    if (m_shatterOpen) {
+        float t = Clamp01(m_shatterT / 0.6f);
+        float ease2 = 1.0f - (1.0f - t) * (1.0f - t);
+        cv.PushOpacity(1.0f - t);
+        for (size_t i = 0; i < m_shards.size(); ++i) {
+            float sx = m_shatterPos.x + m_shards[i].vx * ease2;
+            float sy = m_shatterPos.y + m_shards[i].vy * ease2 + 60.0f * t * t;   // 重力下坠
+            float ss = 7.0f * (1.0f - t * 0.5f);
+            D2D1_RECT_F r{ sx - ss, sy - ss, sx + ss, sy + ss };
+            cv.PushTransform(D2D1::Matrix3x2F::Rotation(m_shards[i].rot * 60.0f * t,
+                                                        D2D1::Point2F(sx, sy)));
+            cv.FillRoundRect(r, 1.5f, WithAlpha(m_shatterCol, 0.9f));
+            cv.PopTransform();
+        }
+        cv.PopOpacity();
+    }
+
     // 展开卡（最上层）
     if (m_expOpen) DrawExpand(cv);
+
+    // G9 右键菜单（最最上层）
+    if (m_menuOpen) DrawMenu(cv);
 
     // 制卡弹窗（最上层）
     if (m_ceOpen) {
