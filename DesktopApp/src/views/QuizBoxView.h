@@ -1,10 +1,8 @@
 #pragma once
 // ============================================================
-//  QuizBoxView.h — 题集卡片盒 v2（批次 G2）
-//  三层结构：题集（房子）→ 题盒（盒子）→ 卡片（方块）。
-//  四态：题集架 / 盒架 / 盒内 / 抽卡 + 居中制卡弹窗。
-//  视图切换渐入、新建弹入、hover 浮起（T2 基础动效）。
-//  完整需求见 docs/题集卡片盒·开发文档.md。
+//  QuizBoxView.h — 题集卡片盒 v3 星云架构（批次 G8）
+//  星云即唯一界面：恒星=题集 / 轨道=题盒 / 小方块=卡片。
+//  需求细节见 docs/题集卡片盒·星云架构v3.md（唯一基准）。
 // ============================================================
 #include "ui/View.h"
 #include "ui/FieldEdit.h"
@@ -13,7 +11,7 @@
 
 namespace lj {
 
-// G4 T6：导入解析结果（md/csv → 盒 + 卡）
+// G4 T6：导入解析结果
 struct QuizBoxImpBox
 {
     std::wstring name;
@@ -31,138 +29,119 @@ public:
     void Layout(const D2D1_RECT_F& area, Canvas& cv) override;
     void Update(float dt, const Input& in) override;
     void Paint(Canvas& cv) override;
-    void DebugForcePreview() override;   // 截图自检：题集架
-    void DebugForceOpen() override;     // 截图自检：盒内 + 制卡弹窗
+    void DebugForcePreview() override;
+    void DebugForceOpen() override;
 
 private:
-    enum V { V_SETS = 0, V_BOXES = 1, V_BOX = 2, V_DRAW = 3, V_NEBULA = 4 };
-
-    // 当前位置（三层导航）
-    int  m_view = V_SETS;
-    int  m_curSet = -1;          // 题集索引
-    int  m_curBox = -1;          // 盒索引（m_sets[m_curSet].boxes 内）
-    int  m_drawIdx = -1;         // 抽中卡索引
-    bool m_flip = false;
+    enum V { V_NEBULA = 0 };   // v3：星云即唯一界面
+    int  m_view = V_NEBULA;
 
     // 数据
     std::vector<QuizSet> m_sets;
+    int  m_curSet = 0;           // 导入目标题集
 
-    // ---- 绘制（各态）----
-    void DrawSets(Canvas& cv, float s);
-    void DrawBoxes(Canvas& cv, float s);
-    void DrawBox(Canvas& cv, float s);
-    void DrawDraw(Canvas& cv, float s);
-    void DrawCardEditor(Canvas& cv, float s);   // T3 制卡弹窗
-    void DrawHouse(Canvas& cv, const D2D1_RECT_F& r, const D2D1_COLOR_F& accent) const;
-    void DrawBoxIcon(Canvas& cv, const D2D1_RECT_F& r, const D2D1_COLOR_F& accent,
-                     bool wrong) const;
-    void Toast(const std::wstring& msg);
+    // v3：可见题集 / 聚焦（N1）
+    std::vector<int> m_visibleSets;
+    int  m_focusSet = -1;
+    std::vector<D2D1_POINT_2F> m_setCenters;
+    std::vector<D2D1_RECT_F> m_setHitR;
+    void RebuildVisible();
+    void SetCenters();
+    void AfterTreeChange();       // N2 崩溃防线
 
-    // ---- 命中区（内容坐标，Layout/Paint/Update 共用）----
-    std::vector<D2D1_RECT_F> m_setRects, m_setDelRects;
-    D2D1_RECT_F m_newSetRect{};
-    std::vector<D2D1_RECT_F> m_boxRects, m_boxRenRects, m_boxDelRects;
-    D2D1_RECT_F m_newBoxRect{};
-    D2D1_RECT_F m_nebBtn{};           // G5：盒架「🌌 星云」入口
-    D2D1_RECT_F m_impBtn{};           // G4：盒架「📥 导入题库」入口
+    // ---- G5/G6：星云渲染与交互 ----
+    struct NebCard {
+        int setIdx = -1;
+        int boxIdx = -1, cardIdx = -1;
+        D2D1_POINT_2F pos{};
+        float z = 0.0f, scale = 1.0f, alpha = 1.0f;
+        D2D1_RECT_F rect{};
+    };
+    std::vector<NebCard> m_nebCards;
+    float m_orbit = 0.0f;
+    int   m_hoverNeb = -1;
+    bool  m_nebDrag = false;
+    int   m_nebDragIdx = -1;
+    float m_nebDragX = 0.0f, m_nebDragY = 0.0f;
+    float m_dragStartX = 0.0f, m_dragStartY = 0.0f;
+    int   m_nebDropBox = -1;
+    void DrawNebula(Canvas& cv, float s);
 
-    // ---- G4：T6 导入题库（md/csv 符号解析 + 预览确认）----
+    // ---- 侧边栏（G6 T11）----
+    FieldEdit m_search;
+    bool  m_searchActive = false;
+    std::wstring m_searchStr;
+    std::vector<std::pair<int, std::pair<int,int>>> m_searchHits;
+    bool  m_showMode = false;
+    float m_showT = 0.0f;
+    int   m_sortMode = 0;
+    bool  m_focusOn = false;
+    float m_focusX = 0.0f, m_focusY = 0.0f;
+    D2D1_RECT_F m_sbSearchBox{}, m_sbSearchGo{}, m_sbShowBtn{};
+    D2D1_RECT_F m_sbSortR[3]{};
+    D2D1_RECT_F m_sbFocusBtn{};
+    std::vector<D2D1_RECT_F> m_sbChkRects;
+    std::vector<D2D1_RECT_F> m_sbBoxRows, m_sbBoxRenR, m_sbBoxDelR;
+    D2D1_RECT_F m_sbNewBoxBtn{};
+    D2D1_RECT_F m_sbImportBtn{};
+    D2D1_RECT_F m_newSetBtn{};
+    void ApplySearch();
+    void EnterShowMode();
+    void DrawSidebar(Canvas& cv);
+
+    // ---- N4：展开卡 ----
+    bool  m_expOpen = false;
+    int   m_expBox = -1;         // 题集索引
+    int   m_expCard = -1;        // 盒索引
+    int   m_expCard2 = -1;       // 卡索引
+    float m_expT = 1.0f;
+    bool  m_expFlip = false;
+    float m_expFlipT = 1.0f;
+    D2D1_RECT_F m_expFlipBtn{}, m_expRemBtn{}, m_expWrongBtn{};
+    void DrawExpand(Canvas& cv);
+
+    // ---- T3 制卡弹窗 ----
+    FieldEdit m_edit;
+    bool  m_ceOpen = false;
+    int   m_ceField = 0;
+    int   m_ceDiff = 3;
+    std::wstring m_ceFront, m_ceBack, m_ceTag;
+    std::wstring m_ceEditId;
+    std::wstring m_ceTargetBox;
+    D2D1_RECT_F m_ceCard{}, m_ceFrontR{}, m_ceBackR{}, m_ceTagR{},
+                m_ceDiffR[5]{}, m_ceSaveR{}, m_ceSaveMoreR{}, m_ceCancelR{};
+    void OpenCardEditor(const QCard* edit, const std::wstring& targetBox);
+    void CeCommit(bool keepOpen);
+    void CeCancel();
+    void CeNext();
+    void CeSwitchField(int idx);
+    D2D1_POINT_2F EditorCenter() const;   // N7：弹窗中心（聚焦恒星/屏幕中心）
+
+    // ---- 改名 ----
+    FieldEdit m_ren;
+    bool  m_renActive = false;
+    int   m_renBox = -1;
+    D2D1_RECT_F m_renBox2{};
+
+    // ---- G4 导入 ----
     bool  m_impOpen = false;
     std::wstring m_impFile;
     std::vector<QuizBoxImpBox> m_impBoxes;
     D2D1_RECT_F m_impCard{}, m_impOkR{}, m_impCancelR{};
-    void BrowseImport();             // 选文件 → 解析 → 预览弹窗
-    void DoImport();                 // 确认导入（同名盒合并，否则新建）
-    D2D1_RECT_F m_backRect{}, m_drawBtn{}, m_addBtn{};
-    std::vector<D2D1_RECT_F> m_cardRects, m_cardDelRects;
-    D2D1_RECT_F m_flipRect{}, m_nextRect{}, m_backDrawRect{};
+    D2D1_RECT_F m_impBtn{};
+    void BrowseImport();
+    void DoImport();
 
-    // ---- T3 制卡弹窗（居中卡片窗：题面/答案/标签/难度 1-5）----
-    FieldEdit m_edit;                // 制卡弹窗输入（front/back/tag 三段）
-    bool  m_ceOpen = false;
-    int   m_ceField = 0;              // 0=front 1=back 2=tag
-    int   m_ceDiff = 3;               // 难度
-    std::wstring m_ceFront, m_ceBack, m_ceTag;
-    std::wstring m_ceEditId;           // 非空 = 编辑既有卡
-    D2D1_RECT_F m_ceCard{}, m_ceFrontR{}, m_ceBackR{}, m_ceTagR{},
-                m_ceDiffR[5]{}, m_ceSaveR{}, m_ceSaveMoreR{}, m_ceCancelR{};
-    void OpenCardEditor(const QCard* edit);   // edit=null 新建
-    void CeCommit(bool keepOpen);
-    void CeCancel();
-    void CeNext();                    // 回车推进字段 / 最后字段保存
-    void CeSwitchField(int idx);     // 点击字段切换
-
-    // ---- 改名（题集 / 题盒共用一个 FieldEdit）----
-    FieldEdit m_ren;
-    bool  m_renActive = false;
-    int   m_renSet = -1, m_renBox = -1;   // 目标（-1 = 该层不适用）
-    D2D1_RECT_F m_renBox2{};              // 盒名就地编辑框
-
-    // ---- 动效（T2）----
-    float m_viewT = 1.0f;            // 视图切换计时（0→1，150ms 渐入：12px 上滑 + alpha）
-    float m_newT = 0.0f;             // 新建条目弹入计时
-    int   m_newHighlight = -1;      // 新建高亮下标（盒架/题集架）
-    int   m_hoverCard = -1;          // 盒内 hover 卡（浮起）
-
-    // ---- G3：T5 抽卡动效 ----
-    float m_popT = 1.0f;             // 弹卡计时（0→0.45s：盖子开 + 卡飞出）
-    float m_flipT = 1.0f;            // 翻面计时（0→0.28s：rotateY 模拟）
-    // ---- G3：T10 反馈闭环（记住了 / 答错了）----
-    D2D1_RECT_F m_remRect{}, m_wrongRect{};
-    // ---- G3：T4 卡片拖拽跨盒 ----
-    bool  m_dragging = false;
-    int   m_dragIdx = -1;
-    float m_dragX = 0.0f, m_dragY = 0.0f;
-    float m_dragStartX = 0.0f, m_dragStartY = 0.0f;
-    bool  m_moveOpen = false;        // 「移动到题盒」浮层
-    std::vector<std::wstring> m_moveBoxIds;
-    std::vector<std::wstring> m_moveBoxNames;
-    std::vector<D2D1_RECT_F>  m_moveRects;
-    D2D1_RECT_F m_movePanel{};
-    void StartDraw();                 // 抽一张（重置弹卡动画）
-    float CardHeat(const QCard& c) const;   // 红警示 0..1
-
-    // ---- G5：T8 卡片星云（轨道模型 + 伪 3D + 难度高亮）----
-    struct NebCard {
-        int boxIdx = -1, cardIdx = -1;
-        D2D1_POINT_2F pos{};
-        float z = 0.0f;             // 深度 -1（远）..1（近）
-        float scale = 1.0f, alpha = 1.0f;
-        D2D1_RECT_F rect{};          // 屏幕坐标（含缩放后尺寸）
-    };
-    std::vector<NebCard> m_nebCards;  // 每帧由 Paint 重建
-    float m_orbit = 0.0f;             // 公转角（慢速漂移）
-    int   m_hoverNeb = -1;           // hover 小卡（同步高亮同难度）
-    D2D1_RECT_F m_nebBackRect{};
-    void DrawNebula(Canvas& cv, float s);
-
-    // ---- G6：T9 星云拖拽归类 ----
-    bool  m_nebDrag = false;
-    int   m_nebDragIdx = -1;          // m_nebCards 下标
-    float m_nebDragX = 0.0f, m_nebDragY = 0.0f;
-    int   m_nebDropBox = -1;          // 拖拽悬停的目标轨道（题盒索引，-1 无）
-    // ---- G6：T11 侧边栏（搜索 / 排列 / 聚焦 / 题集切换）----
-    FieldEdit m_search;               // 搜索框（星云态专用）
-    bool  m_searchActive = false;     // 搜索框编辑中
-    std::wstring m_searchStr;
-    std::vector<std::pair<int,int>> m_searchHits;   // 命中 (boxIdx,cardIdx)
-    bool  m_showMode = false;         // 展现模式：命中卡片依次排列
-    float m_showT = 0.0f;
-    int   m_sortMode = 0;             // 0=默认 1=时间 2=难度 3=热度
-    bool  m_focusOn = false;          // 聚焦放大镜
-    float m_focusX = 0.0f, m_focusY = 0.0f;   // 聚焦中心（跟随鼠标，Update 记录）
-    D2D1_RECT_F m_sbSearchBox{}, m_sbSearchGo{}, m_sbShowBtn{};
-    D2D1_RECT_F m_sbSortR[3]{};
-    D2D1_RECT_F m_sbFocusBtn{}, m_sbSetBtn{};
-    std::vector<std::pair<std::wstring, int>> m_sbOtherSets;   // 其他题集（名,索引）
-    std::vector<D2D1_RECT_F> m_sbSetRects;
-    void ApplySearch();              // m_searchStr → m_searchHits
-    void EnterShowMode();
-    void DrawSidebar(Canvas& cv);    // G6 T11：星云右侧功能栏（搜索/排列/聚焦/题集）
+    // ---- 通用 ----
+    void DrawHouse(Canvas& cv, const D2D1_RECT_F& r, const D2D1_COLOR_F& accent) const;
+    float CardHeat(const QCard& c) const;
+    void Toast(const std::wstring& msg);
 
     D2D1_RECT_F m_area{};
     Canvas* m_cv = nullptr;
     float m_t = 0.0f;
+    float m_viewT = 1.0f;
+    float m_newT = 1.0f;
     std::wstring m_toast;
     float m_toastT = 0.0f;
 };
