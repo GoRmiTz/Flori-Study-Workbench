@@ -211,6 +211,18 @@ void RoadmapView::Update(float dt, const Input& in)
     m_editAnim += (target - m_editAnim) * (std::min)(1.0f, dt * 14.0f);
     if (!m_editing && m_editAnim < 0.004f) m_editAnim = 0.0f;
 
+    // 批次 D：渐入动画期间隐藏正文 RichEdit——GDI 子窗口不参与 D2D 透明动画，
+    // 动画中显示会以一块不透明的白/深矩形暴露（用户说的「白块」）。动画完成后
+    // 一并出现，并把焦点交给正文（新建时焦点已在标题框，不受影响）。
+    if (m_edBody) {
+        bool want = m_editing && m_editAnim > 0.99f;
+        bool vis = IsWindowVisible(m_edBody) != FALSE;
+        if (want != vis) {
+            ShowWindow(m_edBody, want ? SW_SHOWNA : SW_HIDE);
+            if (want && !m_titleActive) SetFocus(m_edBody);
+        }
+    }
+
     // 预览弹层淡入淡出
     float ptarget = m_previewing ? 1.0f : 0.0f;
     m_previewAnim += (ptarget - m_previewAnim) * (std::min)(1.0f, dt * 14.0f);
@@ -637,6 +649,14 @@ void RoadmapView::PaintEditorOverlay(Canvas& cv)
     cv.PaperCard(m_edCard, 0.4f, shape::kEdge);
     cv.DoubleFrame(m_edCard, WithAlpha(pal.seal, 0.8f));
 
+    // 批次 D：头部右侧「ESC 取消」提示 + 头部骑缝虚线（编辑器分区更清爽）
+    TextStyle esc; esc.role = FontRole::Mono; esc.size = 10.0f; esc.letterSpacing = 1.0f;
+    esc.hAlign = HAlign::Right; esc.vAlign = VAlign::Middle;
+    cv.Text(L"ESC 取消", { m_edCard.right - 140.0f, m_edCard.top + 22.0f,
+                           m_edCard.right - 26.0f, m_edCard.top + 44.0f }, esc, pal.ink300);
+    cv.PerforationH(m_edCard.left + 26.0f, m_edCard.right - 26.0f,
+                    m_edCard.top + 62.0f, WithAlpha(pal.ruleStrong, 0.5f));
+
     TextStyle ttl; ttl.role = FontRole::Serif; ttl.size = 20.0f;
     ttl.weight = DWRITE_FONT_WEIGHT_BOLD; ttl.letterSpacing = 1.4f;
     cv.Text(m_editId.empty() ? L"新建专栏" : L"编辑专栏",
@@ -659,8 +679,8 @@ void RoadmapView::PaintEditorOverlay(Canvas& cv)
                               m_edTitleBuf.empty() ? pal.ink300 : pal.ink900, -1, 4.0f);
         }
     }
-    cv.Text(L"正文", { m_edBodyBox.left, m_edBodyBox.top - 20.0f,
-                       m_edBodyBox.right, m_edBodyBox.top - 4.0f }, hs, pal.seal);
+    cv.Text(L"正文", { m_edBodyBox.left, m_edBodyBox.top - 26.0f,
+                       m_edBodyBox.right, m_edBodyBox.top - 10.0f }, hs, pal.seal);
 
     // ---- 格式工具栏（D2D 绘制；点击经 Update 应用到 RichEdit 选区/插入点）----
     // 当前选区/插入点的字号与效果，用于高亮当前生效的按钮
@@ -738,9 +758,33 @@ void RoadmapView::PaintEditorOverlay(Canvas& cv)
     cv.StrokeRoundRect({ m_edTitleBox.left - 3.0f, m_edTitleBox.top - 3.0f,
                          m_edTitleBox.right + 3.0f, m_edTitleBox.bottom + 3.0f },
                        4.0f, WithAlpha(pal.rule, 0.9f), shape::kHair);
-    cv.StrokeRoundRect({ m_edBodyBox.left - 3.0f, m_edBodyBox.top - 3.0f,
-                         m_edBodyBox.right + 3.0f, m_edBodyBox.bottom + 3.0f },
-                       4.0f, WithAlpha(pal.rule, 0.9f), shape::kHair);
+    // 批次 D：正文内衬底——给 RichEdit 一个同色纸面容器（视觉上正文坐在卡内，
+    // 与其他输入框一致），并随主题同步 RichEdit 背景（缓存色变化才发消息）
+    {
+        D2D1_RECT_F liner{ m_edBodyBox.left - 8.0f, m_edBodyBox.top - 8.0f,
+                           m_edBodyBox.right + 8.0f, m_edBodyBox.bottom + 8.0f };
+        COLORREF face = RgbOf(lj::CardFace(0.4f));
+        D2D1_COLOR_F faceD{};
+        faceD.r = (float)GetRValue(face) / 255.0f;
+        faceD.g = (float)GetGValue(face) / 255.0f;
+        faceD.b = (float)GetBValue(face) / 255.0f;
+        faceD.a = 1.0f;
+        cv.FillRoundRect(liner, 6.0f, faceD);
+        cv.StrokeRoundRect(liner, 6.0f, WithAlpha(pal.rule, 0.9f), shape::kHair);
+        cv.StrokeRoundRect({ m_edBodyBox.left - 3.0f, m_edBodyBox.top - 3.0f,
+                             m_edBodyBox.right + 3.0f, m_edBodyBox.bottom + 3.0f },
+                           4.0f, WithAlpha(pal.rule, 0.5f), shape::kHair);
+        // 主题切换时同步 RichEdit 背景（色相同则跳过）
+        static COLORREF s_lastBg = 0;
+        if (s_lastBg != face && m_edBody) {
+            SendMessageW(m_edBody, EM_SETBKGNDCOLOR, 0, (LPARAM)face);
+            s_lastBg = face;
+        }
+    }
+
+    // 批次 D：底部按钮区分隔虚线
+    cv.PerforationH(m_edCard.left + 26.0f, m_edCard.right - 26.0f,
+                    m_edCard.bottom - 64.0f, WithAlpha(pal.ruleStrong, 0.5f));
 
     auto Btn = [&](const D2D1_RECT_F& r, const wchar_t* label, bool primary, bool danger) {
         cv.FillRoundRect(r, 6.0f, danger ? pal.vermilion : (primary ? pal.seal : pal.paperLo));
@@ -795,11 +839,13 @@ void RoadmapView::ComputeEditorRects()
     put2(m_edImage, 42);   put2(m_edLink, 42);     put2(m_edHr, 42);
 
     m_edBodyBox  = { x + 24.0f, yy + 196.0f, x + w - 24.0f, yy + h - 72.0f };
+    // 批次 D：底部按钮重排——取消居左，动作组靠右（保存主按钮最右），删除（红）最右
     const float bw = 110.0f, bbh = 36.0f;
-    m_edCancel = { x + w - 24.0f - bw, yy + h - 52.0f, x + w - 24.0f, yy + h - 16.0f };
-    m_edSave   = { m_edCancel.left - bw - 12.0f, m_edCancel.top, m_edCancel.left - 12.0f, m_edCancel.bottom };
-    m_edPublish= { m_edSave.left - bw - 12.0f, m_edCancel.top, m_edSave.left - 12.0f, m_edCancel.bottom };
-    m_edDelete = { m_edPublish.left - bw - 12.0f, m_edCancel.top, m_edPublish.left - 12.0f, m_edCancel.bottom };
+    float by0 = yy + h - 52.0f;
+    m_edCancel = { x + 24.0f, by0, x + 24.0f + bw, by0 + bbh };
+    m_edSave    = { x + w - 24.0f - bw, by0, x + w - 24.0f, by0 + bbh };
+    m_edPublish = { m_edSave.left - bw - 12.0f, by0, m_edSave.left - 12.0f, by0 + bbh };
+    m_edDelete  = { m_edPublish.left - bw - 12.0f, by0, m_edPublish.left - 12.0f, by0 + bbh };
 
     // ---- 颜色浮层（开启时放在卡片右侧，避免被正文 RichEdit 子窗口遮挡/吞点击）----
     m_edSwatches.clear();
@@ -1109,8 +1155,17 @@ void RoadmapView::OpenEditor(const std::wstring& id)
         SetWindowPos(m_edBody, nullptr, (int)(m_edBodyBox.left * s), (int)(m_edBodyBox.top * s),
                      (int)((m_edBodyBox.right - m_edBodyBox.left) * s),
                      (int)((m_edBodyBox.bottom - m_edBodyBox.top) * s), SWP_NOZORDER);
-        ShowWindow(m_edBody, SW_SHOW);
-        SetFocus(m_edBody);
+        // 显隐交给 Update 的动画门（渐入完成才显示，防白块）；焦点也在那时给
+    }
+    // 新建专栏：焦点自动进标题框——用户打开即可直接打字（旧版焦点在正文，
+    // 用户对着标题框打字却全进了正文，标题的「未命名专栏」纹丝不动）。
+    // 编辑已有专栏：保持焦点进正文（动画完成后由 Update 补焦点）。
+    if (m_editId.empty()) {
+        m_edTitle.onEnter     = [this] { CommitTitleEdit(); if (m_edBody) SetFocus(m_edBody); };
+        m_edTitle.onEsc       = [this] { m_edColorMode = 0; m_fmtBrush = false; CloseEditor(false); };
+        m_edTitle.onKillFocus = [this] { CommitTitleEdit(); };
+        m_edTitle.Begin(m_edTitleBuf, false, 17.0f);
+        m_titleActive = true;
     }
 }
 
@@ -1232,7 +1287,16 @@ std::wstring RoadmapView::GenId() const
 
 void RoadmapView::DebugForceOpen()
 {
-    if (!m_cols.empty()) OpenEditor(m_cols.front().id);
+    // 截图环境无账户数据：造一条示例专栏再打开编辑器
+    if (m_cols.empty()) {
+        Column c;
+        c.id = L"shot_col";
+        c.title = L"行测备考总路线";
+        c.body = L"阶段一：资料分析专项。\n阶段二：判断推理强化。";
+        c.createdAt = c.updatedAt = (long long)std::time(nullptr);
+        m_cols.push_back(c);
+    }
+    OpenEditor(m_cols.front().id);
 }
 
 void RoadmapView::DebugForcePreview()
