@@ -445,7 +445,9 @@ void CheckinStore::SaveSettings(const AppSettings& s)
     // F-D7 增强：复盘每日自动 nudge 配置
     out += "  \"reviewNudge\": " + std::string(s.reviewNudge ? "1" : "0") + ",\n";
     out += "  \"reviewNudgeHour\": " + std::to_string(s.reviewNudgeHour) + ",\n";
-    out += "  \"reviewNudgeLast\": " + JQuote(W2U(s.reviewNudgeLast)) + "\n";
+    out += "  \"reviewNudgeLast\": " + JQuote(W2U(s.reviewNudgeLast)) + ",\n";
+    // 关闭按钮行为（0 询问 / 1 退出 / 2 托盘）
+    out += "  \"exitAction\": " + std::to_string(s.exitAction) + "\n";
     out += "}\n";
     WriteFileRaw(SettingsFilePath(), out);
     Cloud::Instance().MarkDirty();   // 写盘即打脏：后台线程防抖后静默上推

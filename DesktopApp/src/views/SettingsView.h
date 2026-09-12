@@ -51,7 +51,7 @@ struct SecInfo
 
 enum RowTag
 {
-    TAG_FOCUS = 1, TAG_CAT,
+    TAG_FOCUS = 1, TAG_CAT, TAG_EXIT,
     TAG_AIBASE, TAG_AIKEY, TAG_AIMODEL
 };
 
@@ -91,6 +91,7 @@ private:
     // 通用
     bool        m_dark = false, m_reviewNudge = true;
     int         m_reviewHour = 21;
+    int         m_exitAction = 0;              // 关闭按钮行为：0 询问 / 1 退出 / 2 托盘
     std::wstring m_focusApps;                  // 逗号分隔
     // AI 出题凭据（本地 ai.json，独占不进云）
     std::wstring m_aiBase, m_aiKey, m_aiModel;

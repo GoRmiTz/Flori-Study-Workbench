@@ -102,6 +102,8 @@ void Window::ToggleMaximize()
 
 void Window::Close() { PostMessageW(m_hwnd, WM_CLOSE, 0, 0); }
 
+void Window::ForceClose() { PostMessageW(m_hwnd, WM_CLOSE, 0, 1); }
+
 LRESULT CALLBACK Window::WndProcStatic(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
     Window* self = nullptr;
@@ -287,6 +289,9 @@ LRESULT Window::WndProc(UINT msg, WPARAM wp, LPARAM lp)
     }
 
     case WM_CLOSE:
+        // lp==1 为强制关闭（App 弹层「退出」/ 托盘菜单「退出」）；
+        // 否则交给 App 决定：直接退 / 最小化到托盘 / 弹确认层（按设置）。
+        if (lp == 0 && onCloseRequest) { onCloseRequest(); return 0; }
         m_closed = true;
         DestroyWindow(m_hwnd);
         return 0;

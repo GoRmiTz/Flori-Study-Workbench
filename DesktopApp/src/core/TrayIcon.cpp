@@ -241,7 +241,7 @@ void TrayIcon::ShowContextMenu()
     DestroyMenu(menu);
 
     if (cmd == 1) RestoreFromTray();
-    else if (cmd == 2 && m_owner) PostMessageW(m_owner, WM_CLOSE, 0, 0);
+    else if (cmd == 2 && m_owner) PostMessageW(m_owner, WM_CLOSE, 0, 1);  // lp=1 强制退出，不再弹确认
     else if (cmd >= 100 && m_onMenuExtra) m_onMenuExtra(cmd);
 }
 

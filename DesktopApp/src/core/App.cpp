@@ -294,6 +294,8 @@ bool App::Initialize(HINSTANCE hInst)
     m_topbar.onMaximize    = [this] { m_window.ToggleMaximize(); };
     m_topbar.onClose       = [this] { m_window.Close(); };
     m_topbar.onToggleTheme = [this] { ToggleTheme(); };
+    // 关闭按钮行为分流（设置 → 通用 → 「点关闭按钮时」）
+    m_window.onCloseRequest = [this] { OnCloseRequest(); };
     m_topbar.onAccount      = [this] { m_router.GoTo(L"login"); };
     m_topbar.onLogout       = [this] {
         FocusTracker::Instance().Flush();
@@ -600,22 +602,27 @@ void App::Frame()
     if (m_shotMode && m_shotScroll > 0.0f && m_router.Current())
         m_router.Current()->SetScroll(m_shotScroll);
 
+    // 退出确认弹层：压住一切输入（顶栏 / 视图 / 浮层播放器）
+    const bool exitAsking = m_exitAsk;
+    if (exitAsking) { ExitAskLayout(W, H); ExitAskUpdate(); }
+
     //
     //
     {
         Input barIn = m_input;
+        if (exitAsking) { barIn.clicked = barIn.released = barIn.pressed = false; barIn.wheel = 0.0f; }
         if (!full) barIn.mouseY = m_input.mouseY - (barH - shape::kTitleBar);
         m_topbar.Update(dt, barIn, m_router.CurrentId(), full);
     }
 
     //
     Input viewIn = m_input;
-    if (m_topbar.AccountPopupOpen()) {
+    if (m_topbar.AccountPopupOpen() || exitAsking) {
         viewIn.clicked = false; viewIn.released = false; viewIn.pressed = false;
         viewIn.wheel = 0.0f;
     }
     // 浮空播放器（#49，全局常驻）：拦截落在它之上的输入，避免穿透到当前页
-    if (!full) {
+    if (!full && !exitAsking) {
         FloatingPlayer::Instance().Update(dt, m_input, D2D1_RECT_F{ 0.0f, 0.0f, W, H });
         if (FloatingPlayer::Instance().ConsumeInput())
             viewIn.clicked = viewIn.released = viewIn.pressed = false;
@@ -660,6 +667,9 @@ void App::Frame()
 
     if (!full) FloatingPlayer::Instance().Paint(m_canvas, D2D1_RECT_F{ 0.0f, 0.0f, W, H });
 
+    // 退出确认弹层（最顶层，光标之下）
+    if (m_exitAsk) ExitAskPaint(m_canvas, W, H);
+
     m_cursor.Paint(m_canvas);
 
     m_gfx.EndD2D();
@@ -678,6 +688,128 @@ void App::Frame()
                 m_router.CurrentId().c_str(), scroll, m_shotPath.c_str());
         PostQuitMessage(0);
     }
+}
+
+// ============================================================
+//  退出确认弹层（设置 → 通用 → 「点关闭按钮时」可改默认行为）
+// ============================================================
+void App::OnCloseRequest()
+{
+    AppSettings s = CheckinStore::Instance().LoadSettings();
+    int act = s.exitAction;
+    if (act < 0 || act > 2) act = 0;
+    if (act == 1) { m_window.ForceClose(); return; }                 // 直接退出
+    if (act == 2) { TrayIcon::Instance().MinimizeToTray(); return; } // 最小化到托盘
+    m_exitAsk = true;                                                // 每次询问
+    m_exitT = 0.0f;
+    m_exitRemember = false;
+}
+
+void App::ApplyExitChoice(int action)
+{
+    AppSettings s = CheckinStore::Instance().LoadSettings();
+    s.exitAction = action;
+    CheckinStore::Instance().SaveSettings(s);
+}
+
+void App::ExitAskLayout(float W, float H)
+{
+    const float cw = 400.0f, ch = 218.0f;
+    float cx = (W - cw) * 0.5f;
+    float cy = (H - ch) * 0.5f;
+    m_exitCard    = { cx, cy, cx + cw, cy + ch };
+    float by = cy + ch - 62.0f;
+    m_exitBtnTray = { cx + 24.0f, by, cx + 178.0f, by + 42.0f };
+    m_exitBtnQuit = { cx + cw - 196.0f, by, cx + cw - 24.0f, by + 42.0f };
+    m_exitChk     = { cx + 24.0f, by - 36.0f, cx + 40.0f, by - 20.0f };
+}
+
+bool App::ExitAskUpdate()
+{
+    m_exitT = (std::min)(1.0f, m_exitT + m_input.dt * 5.0f);
+    if (m_input.clicked) {
+        float mx = m_input.mouseX, my = m_input.mouseY;
+        auto hit = [](const D2D1_RECT_F& r, float x, float y) {
+            return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+        };
+        if (hit(m_exitBtnQuit, mx, my)) {
+            if (m_exitRemember) ApplyExitChoice(1);
+            m_exitAsk = false;
+            m_window.ForceClose();
+            return true;
+        }
+        if (hit(m_exitBtnTray, mx, my)) {
+            if (m_exitRemember) ApplyExitChoice(2);
+            m_exitAsk = false;
+            TrayIcon::Instance().MinimizeToTray();
+            return true;
+        }
+        if (hit(m_exitChk, mx, my)) m_exitRemember = !m_exitRemember;
+    }
+    return true;   // 弹层期间吃掉一切输入
+}
+
+void App::ExitAskPaint(Canvas& cv, float W, float H)
+{
+    const Palette& pal = cv.Pal();
+    float e = ease::OutCubic(Clamp01(m_exitT));
+
+    // 半透明遮罩
+    cv.PushOpacity(0.55f * e);
+    cv.FillRect({ 0.0f, 0.0f, W, H }, pal.ink900);
+    cv.PopOpacity();
+
+    // 卡片（轻微上滑弹入）
+    cv.PushOpacity(e);
+    float ty = (1.0f - e) * 26.0f;
+    D2D1_RECT_F card = m_exitCard;
+    card.top += ty; card.bottom += ty;
+    cv.FillRoundRect(card, shape::kEdge, pal.paperHi);
+    cv.StrokeRoundRect(card, shape::kEdge, pal.rule, shape::kHair);
+
+    float tx = card.left + 28.0f;
+    float rx = card.right - 28.0f;
+    TextStyle h1; h1.role = FontRole::Serif; h1.size = 21.0f;
+    h1.weight = DWRITE_FONT_WEIGHT_BLACK; h1.letterSpacing = 2.0f;
+    cv.Text(L"退出芙洛理", { tx, card.top + 26.0f, rx, card.top + 54.0f }, h1, pal.ink900);
+    TextStyle desc; desc.role = FontRole::Sans; desc.size = 12.0f;
+    cv.Text(L"确定要退出吗？也可以先最小化到托盘，保持专注提醒。",
+            { tx, card.top + 62.0f, rx, card.top + 84.0f }, desc, pal.ink500);
+
+    // 「不再提示」勾选框
+    D2D1_RECT_F chk = m_exitChk;
+    chk.top += ty; chk.bottom += ty;
+    if (m_exitRemember) {
+        cv.FillRoundRect(chk, shape::kEdgeSoft, pal.seal);
+        float cxm = (chk.left + chk.right) * 0.5f;
+        float cym = (chk.top + chk.bottom) * 0.5f;
+        cv.Line(cxm - 3.5f, cym + 0.5f, cxm - 1.0f, cym + 3.0f, pal.paperHi, 1.8f);
+        cv.Line(cxm - 1.0f, cym + 3.0f, cxm + 4.0f, cym - 3.0f, pal.paperHi, 1.8f);
+    } else {
+        cv.StrokeRoundRect(chk, shape::kEdgeSoft, pal.ink500, shape::kHair);
+    }
+    TextStyle ct; ct.role = FontRole::Sans; ct.size = 11.5f;
+    cv.Text(L"不再提示，记住我的选择",
+            { chk.right + 8.0f, chk.top - 3.0f, rx, chk.bottom + 3.0f }, ct, pal.ink500);
+
+    // 按钮行
+    D2D1_RECT_F bTray = m_exitBtnTray; bTray.top += ty; bTray.bottom += ty;
+    D2D1_RECT_F bQuit = m_exitBtnQuit; bQuit.top += ty; bQuit.bottom += ty;
+    bool hotTray = m_input.mouseX >= bTray.left && m_input.mouseX <= bTray.right &&
+                   m_input.mouseY >= bTray.top && m_input.mouseY <= bTray.bottom;
+    bool hotQuit = m_input.mouseX >= bQuit.left && m_input.mouseX <= bQuit.right &&
+                   m_input.mouseY >= bQuit.top && m_input.mouseY <= bQuit.bottom;
+    cv.FillRoundRect(bTray, shape::kEdge, hotTray ? pal.paperLo : pal.paperHi);
+    cv.StrokeRoundRect(bTray, shape::kEdge, hotTray ? pal.ink700 : pal.rule, shape::kHair);
+    TextStyle bs; bs.role = FontRole::Sans; bs.size = 13.0f;
+    bs.weight = DWRITE_FONT_WEIGHT_SEMI_BOLD;
+    bs.hAlign = HAlign::Center; bs.vAlign = VAlign::Middle;
+    cv.Text(L"最小化到托盘", bTray, bs, pal.ink700);
+
+    cv.FillRoundRect(bQuit, shape::kEdge, pal.seal);
+    cv.Text(L"退出程序", bQuit, bs, pal.paperHi);
+
+    cv.PopOpacity();
 }
 
 } // namespace lj

@@ -432,6 +432,13 @@ void ManageView::Layout(const D2D1_RECT_F& area, Canvas& cv)
 
     SetContentHeight(y - area.top);
     m_built = true;
+
+    // 截图自检：锁定状态下每次重排后重新锚定标签浮层（Initialize 期
+    // Layout 尚未跑过，行按钮几何不存在，只能在首次 Layout 后锚定）
+    if (m_tagPopLock) {
+        for (auto& b : m_rowBtn)
+            if (b.kind == 3) { LayoutTagPop(b.g, b.i, b.r); break; }
+    }
 }
 
 void ManageView::Update(float dt, const Input& in)
@@ -455,6 +462,22 @@ void ManageView::Update(float dt, const Input& in)
     hitAny(m_btnBack); hitAny(m_btnReset); hitAny(m_btnOk);
     hitAny(m_btnExport); hitAny(m_btnImport);
     hitAny(m_msAdd);
+    for (auto& ch : m_tagPopChips) hitAny(ch.first);
+
+    // 标签悬停展开浮层（替代点击循环切换）：悬停标签按钮即展开，
+    // 移出按钮与浮层即收起
+    {
+        int hoverG = -1, hoverI = -1; D2D1_RECT_F hoverR{};
+        for (auto& b : m_rowBtn)
+            if (b.kind == 3 && Hit(b.r, mx, my)) { hoverG = b.g; hoverI = b.i; hoverR = b.r; break; }
+        bool overPop = (m_tagPopG >= 0) && Hit(m_tagPopRect, mx, my);
+        if (hoverG >= 0) {
+            if (m_tagPopG != hoverG || m_tagPopI != hoverI)
+                LayoutTagPop(hoverG, hoverI, hoverR);
+        } else if (m_tagPopG >= 0 && !overPop && !m_tagPopLock) {
+            m_tagPopG = -1; m_tagPopI = -1;
+        }
+    }
 
     // 编辑态：鼠标先交给字段（点击定位光标 / 拖拽框选），点字段外才提交
     if (m_editingOn && m_cvCached) {
@@ -492,6 +515,21 @@ void ManageView::Update(float dt, const Input& in)
                 grp.push_back(ni);
                 m_changed = true; m_built = false; Layout(m_areaCached, *m_cvCached); return;
             }
+        // 标签浮层：选择标签（悬停展开后点击芯片）
+        if (m_tagPopG >= 0) {
+            for (auto& ch : m_tagPopChips) {
+                if (Hit(ch.first, mx, my)) {
+                    auto& grp = (m_tagPopG == 0) ? m_bundle.daily
+                              : (m_tagPopG == 1) ? m_bundle.sat : m_bundle.sun;
+                    if (m_tagPopI >= 0 && m_tagPopI < (int)grp.size()) {
+                        grp[m_tagPopI].tag = kTags[ch.second];
+                        m_changed = true;
+                    }
+                    m_tagPopG = -1; m_tagPopI = -1;
+                    return;
+                }
+            }
+        }
         // 行按钮
         for (auto& b : m_rowBtn) {
             if (!Hit(b.r, mx, my)) continue;
@@ -504,11 +542,8 @@ void ManageView::Update(float dt, const Input& in)
                 return;
             }
             auto& grp = (b.g == 0) ? m_bundle.daily : (b.g == 1) ? m_bundle.sat : m_bundle.sun;
-            if (b.kind == 3) {  // 标签循环
-                int idx = 0;
-                for (int k = 0; k < kTagN; ++k) if (kTags[k] == grp[b.i].tag) { idx = k; break; }
-                grp[b.i].tag = kTags[(idx + 1) % kTagN];
-                m_changed = true;
+            if (b.kind == 3) {  // 标签：改为悬停展开选择，点击本身不再循环
+                return;
             } else if (b.kind == 2) { // 删除
                 if (b.i < (int)grp.size()) grp.erase(grp.begin() + b.i);
                 m_changed = true; m_built = false; Layout(m_areaCached, *m_cvCached);
@@ -524,6 +559,50 @@ void ManageView::Update(float dt, const Input& in)
         // 文本字段 → 编辑
         for (auto& f : m_fields)
             if (Hit(f.r, mx, my)) { BeginEdit(f); return; }
+    }
+}
+
+// 截图自检：空库环境造两个示例打卡项，验证序号徽章与标签浮层
+void ManageView::DebugForcePreview()
+{
+    if (m_bundle.daily.empty()) {
+        CheckItem a; a.id = L"shot_d0"; a.slot = L"06:30"; a.title = L"晨读英语";
+        a.tag = L"英语"; a.minutes = 40;
+        CheckItem b; b.id = L"shot_d1"; b.slot = L"21:00"; b.title = L"行测刷题";
+        b.tag = L"主线"; b.minutes = 90;
+        m_bundle.daily.push_back(a);
+        m_bundle.daily.push_back(b);
+    }
+    m_tagPopLock = true;   // 锁定浮层：Layout 后锚定 + Update 不收起
+    m_built = false;
+    if (m_areaCached.right > m_areaCached.left && m_cvCached)
+        Layout(m_areaCached, *m_cvCached);
+    // 浮层由 Layout() 尾部在 m_tagPopLock 下锚定
+}
+
+// 标签浮层布局：以标签按钮为锚，默认向下展开；贴卡底则向上，左右夹取防溢出
+void ManageView::LayoutTagPop(int g, int i, const D2D1_RECT_F& anchor)
+{
+    m_tagPopG = g; m_tagPopI = i;
+    m_tagPopChips.clear();
+    const float cw = 72.0f, chh = 26.0f, gx = 8.0f, gy = 7.0f, pad = 12.0f;
+    const int cols = 3;
+    const int rows = (kTagN + cols - 1) / cols;
+    const float pw = pad * 2.0f + cols * cw + (cols - 1) * gx;
+    const float ph = pad * 2.0f + rows * chh + (rows - 1) * gy;
+
+    const D2D1_RECT_F& card = m_groupRects[g];
+    float x = anchor.right - pw;
+    x = (std::max)(card.left + 8.0f, (std::min)(x, card.right - 8.0f - pw));
+    float y = anchor.bottom + 6.0f;
+    if (y + ph > card.bottom - 8.0f) y = anchor.top - ph - 6.0f;
+    m_tagPopRect = { x, y, x + pw, y + ph };
+
+    for (int k = 0; k < kTagN; ++k) {
+        int c = k % cols, r = k / cols;
+        float cx = x + pad + c * (cw + gx);
+        float cy = y + pad + r * (chh + gy);
+        m_tagPopChips.push_back({ { cx, cy, cx + cw, cy + chh }, k });
     }
 }
 
@@ -603,9 +682,10 @@ void ManageView::Paint(Canvas& cv)
             cv.FillRoundRect(rc, shape::kEdgeSoft, WithAlpha(pal.rule, 0.10f));
 
             wchar_t num[8]; swprintf_s(num, L"%02d", (int)i + 1);
-            TextStyle ns; ns.role = FontRole::Mono; ns.size = 10.0f; ns.weight = DWRITE_FONT_WEIGHT_BOLD;
-            ns.vAlign = VAlign::Middle;
-            cv.Text(num, { rc.left + 6.0f, rc.top, rc.left + 34.0f, rc.bottom }, ns, pal.ink300);
+            // 序号贴行卡右上角（小徽章），不再画在行中部被字段遮住
+            TextStyle ns; ns.role = FontRole::Mono; ns.size = 9.5f; ns.weight = DWRITE_FONT_WEIGHT_BOLD;
+            ns.hAlign = HAlign::Right; ns.vAlign = VAlign::Middle;
+            cv.Text(num, { rc.right - 40.0f, rc.top + 1.0f, rc.right - 10.0f, rc.top + 12.0f }, ns, pal.ink300);
         }
 
         // 添加一项
@@ -631,8 +711,9 @@ void ManageView::Paint(Canvas& cv)
             D2D1_RECT_F rc{ card.left + 12.0f, rg.top, card.right - 12.0f, rg.top + rg.h - 8.0f };
             cv.FillRoundRect(rc, shape::kEdgeSoft, WithAlpha(pal.rule, 0.10f));
             wchar_t num[8]; swprintf_s(num, L"%02d", (int)i + 1);
-            TextStyle ns; ns.role = FontRole::Mono; ns.size = 10.0f; ns.weight = DWRITE_FONT_WEIGHT_BOLD; ns.vAlign = VAlign::Middle;
-            cv.Text(num, { rc.left + 6.0f, rc.top, rc.left + 34.0f, rc.bottom }, ns, pal.ink300);
+            TextStyle ns; ns.role = FontRole::Mono; ns.size = 9.5f; ns.weight = DWRITE_FONT_WEIGHT_BOLD;
+            ns.hAlign = HAlign::Right; ns.vAlign = VAlign::Middle;
+            cv.Text(num, { rc.right - 40.0f, rc.top + 1.0f, rc.right - 10.0f, rc.top + 12.0f }, ns, pal.ink300);
         }
     }
 
@@ -736,6 +817,35 @@ void ManageView::Paint(Canvas& cv)
     // 本地数据管理（整账户备份）
     DrawFooter(m_btnExport, L"导 出 备 份", false, m_btnExport.left == m_hotRect.left && m_btnExport.top == m_hotRect.top);
     DrawFooter(m_btnImport, L"导 入 备 份", false, m_btnImport.left == m_hotRect.left && m_btnImport.top == m_hotRect.top);
+
+    // 标签悬停浮层（内容坐标内、压住普通内容）
+    if (m_tagPopG >= 0 && m_tagPopI >= 0) {
+        cv.FillRoundRect(m_tagPopRect, shape::kEdge, pal.paperHi);
+        cv.StrokeRoundRect(m_tagPopRect, shape::kEdge, pal.rule, shape::kHair);
+        auto& grp = (m_tagPopG == 0) ? m_bundle.daily : (m_tagPopG == 1) ? m_bundle.sat : m_bundle.sun;
+        const std::wstring curTag = (m_tagPopI < (int)grp.size()) ? grp[m_tagPopI].tag : L"";
+        for (auto& chip : m_tagPopChips) {
+            const wchar_t* tag = kTags[chip.second];
+            const D2D1_RECT_F& r = chip.first;
+            bool hot = (r.left == m_hotRect.left && r.top == m_hotRect.top);
+            bool cur = (curTag == tag);
+            D2D1_COLOR_F col = TagColor(pal, tag);
+            if (hot) {
+                cv.FillRoundRect(r, shape::kEdgeSoft, col);
+            } else if (cur) {
+                cv.FillRoundRect(r, shape::kEdgeSoft, WithAlpha(col, 0.26f));
+            } else {
+                cv.FillRoundRect(r, shape::kEdgeSoft, WithAlpha(col, 0.10f));
+            }
+            cv.StrokeRoundRect(r, shape::kEdgeSoft,
+                               cur ? col : WithAlpha(col, hot ? 1.0f : 0.55f),
+                               cur ? 1.4f : shape::kHair);
+            TextStyle cs; cs.role = FontRole::Sans; cs.size = 11.5f;
+            cs.weight = DWRITE_FONT_WEIGHT_SEMI_BOLD;
+            cs.hAlign = HAlign::Center; cs.vAlign = VAlign::Middle;
+            cv.Text(tag, r, cs, hot ? pal.paperHi : (cur ? col : pal.ink700));
+        }
+    }
 
     cv.PopTransform();
     cv.PopClip();

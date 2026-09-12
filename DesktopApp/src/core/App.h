@@ -38,6 +38,13 @@ private:
     void Frame();
     void ToggleTheme();
 
+    // ---- 退出确认弹层（点关闭按钮时按设置弹出）----
+    void OnCloseRequest();                 // WM_CLOSE(非强制) 分流：退出/托盘/弹层
+    void ExitAskLayout(float W, float H);  // 弹层几何（Update 与 Paint 共用）
+    bool ExitAskUpdate();                  // 弹层输入处理；返回 true = 输入已消费
+    void ExitAskPaint(Canvas& cv, float W, float H);
+    void ApplyExitChoice(int action);      // 「不再提示」：把选择写入 settings.json
+
     Window      m_window;
     Graphics    m_gfx;
     Canvas      m_canvas;
@@ -62,6 +69,13 @@ private:
     Smooth m_barH{ 0.0f, 0.18f };      // 顶栏滑入滑出
     class LoaderView* m_loader = nullptr;   // 取全局显影进度
     bool m_ready = false;
+
+    // 退出确认弹层状态
+    bool  m_exitAsk = false;
+    float m_exitT = 0.0f;              // 弹入动画 0..1
+    bool  m_exitRemember = false;      // 「不再提示」勾选
+    D2D1_RECT_F m_exitCard{};
+    D2D1_RECT_F m_exitBtnTray{}, m_exitBtnQuit{}, m_exitChk{};
 
     // 截图模式
     bool m_shotMode = false;

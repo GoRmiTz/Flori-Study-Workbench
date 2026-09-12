@@ -26,11 +26,17 @@ public:
     void Minimize();
     void ToggleMaximize();
     void Close();
+    // 绕过 onCloseRequest 确认链直接退出（App 弹层「退出」/ 托盘菜单「退出」用）
+    void ForceClose();
 
     // 自绘标题栏高度（DIP），用于 WM_NCHITTEST
     float captionHeight = 0.0f;
     // 返回 true 表示该点属于按钮等控件，不应拖拽窗口
     std::function<bool(float, float)> isBlockedPoint;
+
+    // 用户点关闭（自绘 × / Alt+F4 / WM_CLOSE 且非强制）时回调；
+    // App 在此决定直接退出 / 最小化到托盘 / 弹确认层。不设置则行为同以前。
+    std::function<void()> onCloseRequest;
 
     std::function<void(UINT widthPx, UINT heightPx, UINT dpi)> onResize;
     std::function<void(UINT msg, WPARAM, LPARAM)> onInput;

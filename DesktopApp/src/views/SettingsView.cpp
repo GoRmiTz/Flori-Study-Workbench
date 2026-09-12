@@ -84,6 +84,7 @@ void SettingsView::Load()
     m_dark = s.dark;
     m_reviewNudge = s.reviewNudge;
     m_reviewHour = ((s.reviewNudgeHour % 24) + 24) % 24;
+    m_exitAction = (s.exitAction >= 0 && s.exitAction <= 2) ? s.exitAction : 0;
     m_focusApps.clear();
     for (size_t i = 0; i < s.focusApps.size(); ++i) {
         if (i) m_focusApps += L", ";
@@ -141,6 +142,7 @@ void SettingsView::Apply()
     s.dark = m_dark;
     s.reviewNudge = m_reviewNudge;
     s.reviewNudgeHour = m_reviewHour;
+    s.exitAction = (m_exitAction >= 0 && m_exitAction <= 2) ? m_exitAction : 0;
 
     // 专注白名单：按逗号/空格/顿号切分并规整
     s.focusApps.clear();
@@ -183,6 +185,8 @@ void SettingsView::BuildRows()
     m_rows.push_back(SRow{ .type = SRow::Toggle, .label = L"每日复盘提醒", .pBool = &m_reviewNudge, .sec = 0 });
     m_rows.push_back(SRow{ .type = SRow::Stepper, .label = L"提醒时刻", .pInt = &m_reviewHour,
                            .step = 1, .minv = 0, .maxv = 23, .unit = L"时", .sec = 0 });
+    m_rows.push_back(SRow{ .type = SRow::Stepper, .label = L"点关闭按钮时", .pInt = &m_exitAction,
+                           .step = 1, .minv = 0, .maxv = 2, .tag = TAG_EXIT, .sec = 0 });
     m_rows.push_back(SRow{ .type = SRow::Text, .label = L"专注白名单（逗号分隔，如 notepad）", .pStr = &m_focusApps, .sec = 0 });
 
     // —— 1 练考（AI 出题凭据本地独占，不入库不上云）——
@@ -235,7 +239,7 @@ void SettingsView::Layout(const D2D1_RECT_F& area, Canvas& cv)
                 float th = 26.0f, tw = 46.0f;
                 r.toggle = { right - tw, ry + (rowH - th) * 0.5f, right, ry + (rowH + th) * 0.5f };
             } else if (r.type == SRow::Stepper) {
-                float btn = 30.0f, bw = 64.0f, bh = 30.0f, sp = 6.0f;
+                float btn = 30.0f, bw = (r.tag == TAG_EXIT) ? 126.0f : 64.0f, bh = 30.0f, sp = 6.0f;
                 r.inc   = { right - btn, ry + (rowH - btn) * 0.5f, right, ry + (rowH + btn) * 0.5f };
                 r.value = { right - btn - bw - sp, ry + (rowH - bh) * 0.5f, right - btn - sp, ry + (rowH + bh) * 0.5f };
                 r.dec   = { right - btn - bw - sp - btn - sp, ry + (rowH - btn) * 0.5f, right - btn - bw - sp, ry + (rowH + btn) * 0.5f };
@@ -407,7 +411,17 @@ void SettingsView::PaintStepper(Canvas& cv, SRow& r, const Palette& pal)
     cv.StrokeRoundRect(r.value, shape::kEdgeSoft, pal.rule, shape::kHair);
     TextStyle ts; ts.role = FontRole::Mono; ts.size = 15.0f; ts.weight = DWRITE_FONT_WEIGHT_BOLD;
     ts.hAlign = HAlign::Center; ts.vAlign = VAlign::Middle;
-    std::wstring val = std::to_wstring(r.pInt ? *r.pInt : 0) + (r.unit.empty() ? L"" : (L" " + r.unit));
+    std::wstring val;
+    if (r.tag == TAG_EXIT) {
+        // 关闭按钮行为：数值 → 文案
+        static const wchar_t* kExitModes[] = { L"每次询问", L"直接退出", L"最小化到托盘" };
+        int v = r.pInt ? *r.pInt : 0;
+        if (v < 0 || v > 2) v = 0;
+        ts.size = 13.0f;
+        val = kExitModes[v];
+    } else {
+        val = std::to_wstring(r.pInt ? *r.pInt : 0) + (r.unit.empty() ? L"" : (L" " + r.unit));
+    }
     cv.Text(val, r.value, ts, pal.ink900);
 
     PaintStepBtn2(cv, r.dec, L"\u2212", pal);  // −

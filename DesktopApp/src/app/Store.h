@@ -58,6 +58,10 @@ struct AppSettings
     bool        reviewNudge = true;      // 是否开启每日自动提醒（默认开）
     int         reviewNudgeHour = 21;    // 提醒时刻（24h，默认 21:00 收工前）
     std::wstring reviewNudgeLast;        // 已提醒日期 YYYY-MM-DD（跨重启去重）
+
+    // ---- 关闭按钮行为 ----
+    // 0 = 每次询问（弹自绘确认层）1 = 直接退出 2 = 最小化到托盘
+    int exitAction = 0;
 };
 
 // ---------------- 每日复盘（journal.json）----------------

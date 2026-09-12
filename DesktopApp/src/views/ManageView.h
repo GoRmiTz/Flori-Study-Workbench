@@ -42,6 +42,7 @@ private:
     void CancelEdit();
     void BeginEdit(const FieldHit& fh);
     void DebugForceOpen() override;   // 截图自检：强制打开首个打卡项字段编辑
+    void DebugForcePreview() override;   // 截图自检：造示例打卡项（空库环境验证序号/标签浮层）
     void Save();
     void ReloadDefault();
     void DoExport();     // 导出当前账户全部档案为单文件 JSON
@@ -67,6 +68,13 @@ private:
     std::vector<D2D1_RECT_F> m_groupRects; // 三组卡片外框（绘制）
     std::vector<RowGeom> m_rowGeom[3];      // daily/sat/sun 每组每行的几何（Paint 复用，避免错位）
     std::vector<RowGeom> m_msGeom;          // 关键倒计时每行的几何
+
+    // 标签悬停展开浮层（替代旧的点击循环切换）
+    int  m_tagPopG = -1, m_tagPopI = -1;    // 当前展开的行（组 / 索引）
+    bool m_tagPopLock = false;               // 截图自检：锁定浮层不被 Update 收起
+    D2D1_RECT_F m_tagPopRect{};              // 浮层外框（内容坐标）
+    std::vector<std::pair<D2D1_RECT_F, int>> m_tagPopChips;   // 芯片 rect → kTags 索引
+    void LayoutTagPop(int g, int i, const D2D1_RECT_F& anchor);
 
     // 编辑器（v2 统一输入框：1×1 透明代理 + 全 D3D 自绘，无白块）
     FieldEdit m_edit;
