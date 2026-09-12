@@ -406,6 +406,11 @@ AppSettings CheckinStore::LoadSettings()
     if (auto* rn = JGet(v, "reviewNudge"))    s.reviewNudge = (rn->num != 0);
     if (auto* rh = JGet(v, "reviewNudgeHour")) s.reviewNudgeHour = (int)rh->num;
     if (auto* rl = JGet(v, "reviewNudgeLast")) s.reviewNudgeLast = U2W(rl->str);
+    // 关闭按钮行为（0 询问 / 1 退出 / 2 托盘）
+    if (auto* ex = JGet(v, "exitAction")) s.exitAction = (int)ex->num;
+    if (s.exitAction < 0 || s.exitAction > 2) s.exitAction = 0;
+    // 本地音乐文件夹（批次 B）
+    if (auto* md = JGet(v, "musicDir")) s.musicDir = U2W(md->str);
 
     return s;
 }
@@ -447,7 +452,9 @@ void CheckinStore::SaveSettings(const AppSettings& s)
     out += "  \"reviewNudgeHour\": " + std::to_string(s.reviewNudgeHour) + ",\n";
     out += "  \"reviewNudgeLast\": " + JQuote(W2U(s.reviewNudgeLast)) + ",\n";
     // 关闭按钮行为（0 询问 / 1 退出 / 2 托盘）
-    out += "  \"exitAction\": " + std::to_string(s.exitAction) + "\n";
+    out += "  \"exitAction\": " + std::to_string(s.exitAction) + ",\n";
+    // 本地音乐文件夹（批次 B）
+    out += "  \"musicDir\": " + JQuote(W2U(s.musicDir)) + "\n";
     out += "}\n";
     WriteFileRaw(SettingsFilePath(), out);
     Cloud::Instance().MarkDirty();   // 写盘即打脏：后台线程防抖后静默上推

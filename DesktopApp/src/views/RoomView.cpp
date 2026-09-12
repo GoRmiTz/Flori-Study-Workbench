@@ -7,6 +7,8 @@
 #include "ui/Glyphs.h"      // #49 矢量播放/暂停图标（替代 ⏸ 表情蓝方块）
 #include "ui/Layout.h"
 #include <windows.h>
+#include <shobjidl.h>       // 批次 B：IFileOpenDialog 选音乐文件夹
+#include <shlobj.h>         // SHGetKnownFolderPath / FOLDERID_Music
 #include <ctime>
 #include <cmath>
 #include <algorithm>
@@ -212,6 +214,23 @@ void RoomView::DebugForcePreview()
     OpenWhitelist();
     if (m_wlApps.empty()) m_wlApps = FocusTracker::DefaultUserApps();
     m_wlA.Snap(1.0f);
+}
+
+// 截图自检：强制进入「专注中」（验证专注覆盖层 + 音乐控制条布局）
+void RoomView::DebugForceOpen()
+{
+    m_timer = TimerState::Running;
+    m_remain = 15.0f * 60.0f;
+    m_focusStart = (long long)std::time(nullptr);
+    m_overlayA.Snap(1.0f);
+    // 造两首示例曲目（不真正播放）让控制条显示出来
+    if (MusicPlayer::Instance().Count() == 0) {
+        std::vector<MusicPlayer::Track> demo = {
+            { L"", L"示例曲目 · 雨声白噪音" },
+            { L"", L"示例曲目 · 壁炉噼啪" },
+        };
+        MusicPlayer::Instance().SetPlaylist(std::move(demo));
+    }
 }
 
 void RoomView::CloseWhitelist()
@@ -688,6 +707,7 @@ void RoomView::ToggleStart()
         if (m_remain <= 0.0f) m_remain = (float)m_presetMin * 60.0f;
         m_focusStart = (long long)std::time(nullptr);
         m_timer = TimerState::Running;
+        AutoStartMusic();   // 批次 B：开始专注自动播放背景音乐
     } else if (m_timer == TimerState::Running) {
         m_timer = TimerState::Paused;
     } else {
@@ -846,13 +866,24 @@ void RoomView::LayoutRoom(const D2D1_RECT_F& area, Canvas& cv)
                        m_timerCard.right - 290.0f, m_timerCard.top + 72.0f };
     m_linkBtn.bounds = { m_timerCard.right - 278.0f, m_timerCard.top + 40.0f,
                          m_timerCard.right - 162.0f, m_timerCard.top + 72.0f };
-    // #28 播放控制：note 区右侧 = 播放/暂停按钮 + 音量滑条（自绘）
+    // #28 播放控制：note 区右侧 = ⏮ / 播放暂停 / ⏭ + 音量滑条（批次 B 连播按钮组）
     {
-        float bx = m_timerCard.right - 26.0f - 110.0f - 10.0f - 96.0f;   // 音量条左端
-        m_volRect = { bx, m_musicY + 22.0f + 28.0f, bx + 110.0f, m_musicY + 22.0f + 46.0f };
-        float pbX = m_volRect.right + 10.0f;
-        m_musicBtn.bounds = { pbX, m_musicY + 22.0f + 14.0f, pbX + 96.0f, m_musicY + 22.0f + 14.0f + 36.0f };
-        m_musicBtn.label = L"▶ 播放";
+        float noteTop = m_musicY + 22.0f;
+        float rightE = m_timerCard.right - 26.0f;
+        // 下一首（最右）
+        m_nextR = { rightE - 30.0f, noteTop + 14.0f, rightE, noteTop + 50.0f };
+        // 播放/暂停（中，84 宽容纳 图标+两字文本 不换行）
+        m_musicBtn.bounds = { m_nextR.left - 4.0f - 84.0f, noteTop + 14.0f,
+                              m_nextR.left - 4.0f, noteTop + 50.0f };
+        m_musicBtn.label = L"播放";
+        // 上一首
+        m_prevR = { m_musicBtn.bounds.left - 4.0f - 30.0f, noteTop + 14.0f,
+                    m_musicBtn.bounds.left - 4.0f, noteTop + 50.0f };
+        // 音量滑条（prev 左侧）
+        m_volRect = { m_prevR.left - 12.0f - 96.0f, noteTop + 28.0f,
+                      m_prevR.left - 12.0f, noteTop + 46.0f };
+        // 「选择文件夹」小按钮：SECTION 标题行右端
+        m_dirR = { rightE - 108.0f, m_musicY - 3.0f, rightE, m_musicY + 15.0f };
     }
 
     // 成员卡（右）—— 高度随在场人数动态
@@ -1045,9 +1076,55 @@ void RoomView::Update(float dt, const Input& in)
         }
         if (in.clicked) {
             float sy = in.mouseY + ScrollY();
+            auto hit = [](const D2D1_RECT_F& r, float x, float y) {
+                return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+            };
             const auto& b = m_musicBtn.bounds;
             if (in.mouseX >= b.left && in.mouseX <= b.right && sy >= b.top && sy <= b.bottom) { PlayMusic(); return; }
+            // 批次 B：上一首 / 下一首 / 选择文件夹
+            if (hit(m_prevR, in.mouseX, sy)) { MusicPlayer::Instance().Prev(); return; }
+            if (hit(m_nextR, in.mouseX, sy)) { MusicPlayer::Instance().Next(); return; }
+            if (hit(m_dirR, in.mouseX, sy))  { PickMusicFolder(); return; }
         }
+    }
+
+    // ---- 批次 B：专注覆盖层音乐控制（音量 / 暂停 / 切歌）----
+    if (active && m_overlayA.value > 0.5f) {
+        // 音量条（屏幕坐标，覆盖层不随滚动）
+        const auto& vr = m_ovVol;
+        bool onVol = (vr.right > vr.left && in.mouseX >= vr.left && in.mouseX <= vr.right &&
+                      in.mouseY >= vr.top && in.mouseY <= vr.bottom);
+        if (m_ovVolDrag) {
+            float t = (in.mouseX - vr.left) / (vr.right - vr.left);
+            t = (std::max)(0.0f, (std::min)(1.0f, t));
+            MusicPlayer::Instance().SetVolume(t * t);
+            if (in.released) m_ovVolDrag = false;
+        } else if (in.pressed && onVol) {
+            m_ovVolDrag = true;
+            float t = (in.mouseX - vr.left) / (vr.right - vr.left);
+            t = (std::max)(0.0f, (std::min)(1.0f, t));
+            MusicPlayer::Instance().SetVolume(t * t);
+        }
+        if (in.clicked) {
+            float my = in.mouseY;
+            auto hit = [](const D2D1_RECT_F& r, float x, float y) {
+                return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+            };
+            if (hit(m_ovPrev, in.mouseX, my)) { MusicPlayer::Instance().Prev(); }
+            else if (hit(m_ovNext, in.mouseX, my)) { MusicPlayer::Instance().Next(); }
+            else if (hit(m_ovPlay, in.mouseX, my)) {
+                auto ps = MusicPlayer::Instance().GetState();
+                if (ps == MusicPlayer::State::Playing || ps == MusicPlayer::State::Paused)
+                    MusicPlayer::Instance().Toggle();
+                else
+                    PlayMusic();
+            }
+        }
+        // 光标悬停在覆盖层音乐控件上 → 交互态（按钮高亮 / 手型）
+        bool overCtl = in.mouseX >= m_ovPrev.left && in.mouseX <= m_ovNext.right &&
+                       in.mouseY >= (std::min)(m_ovPrev.top, m_ovVol.top) &&
+                       in.mouseY <= (std::max)(m_ovPrev.bottom, m_ovVol.bottom);
+        if (overCtl) m_overInteractive = true;
     }
 
     // ---- §3 聊天输入（房间内且非静音房）----
@@ -1410,6 +1487,35 @@ void RoomView::PaintMusic(Canvas& cv)
                          MusicPlayer::Instance().GetState() == MusicPlayer::State::Playing,
                          m_musicBtn.HoverAmt() > 0.5f, m_musicBtn.PressAmt() > 0.5f, true);
 
+    // 批次 B：⏮ / ⏭ 圆钮（连播切歌）+ 「选择文件夹」小按钮
+    {
+        auto paintSkip = [&](const D2D1_RECT_F& r, bool forward) {
+            float cy = (r.top + r.bottom) * 0.5f;
+            cv.FillCircle((r.left + r.right) * 0.5f, cy, 15.0f, pal.paperHi);
+            cv.StrokeCircle((r.left + r.right) * 0.5f, cy, 15.0f, pal.rule, shape::kHair);
+            // 三角轮廓（三条线段）+ 竖线；forward 向右，否则镜像
+            float cx = (r.left + r.right) * 0.5f;
+            float s = forward ? 1.0f : -1.0f;
+            float ax = cx - 3.0f * s, ay = cy - 5.0f;
+            float bx = cx + 4.5f * s, by = cy;
+            float dx = cx - 3.0f * s, dy = cy + 5.0f;
+            cv.Line(ax, ay, bx, by, pal.ink700, 1.8f);
+            cv.Line(bx, by, dx, dy, pal.ink700, 1.8f);
+            cv.Line(dx, dy, ax, ay, pal.ink700, 1.8f);
+            float barX = cx - 5.5f * s;
+            cv.Line(barX, cy - 5.0f, barX, cy + 5.0f, pal.ink700, 2.0f);
+        };
+        paintSkip(m_prevR, false);
+        paintSkip(m_nextR, true);
+
+        // 「选择文件夹」（SECTION 行右端，小 mono 文本按钮）
+        bool hasDir = !MusicDirOrDefault().empty();
+        cv.StrokeRoundRect(m_dirR, shape::kEdgeSoft, WithAlpha(pal.rule, 0.8f), shape::kHair);
+        TextStyle dt; dt.role = FontRole::Sans; dt.size = 10.0f;
+        dt.hAlign = HAlign::Center; dt.vAlign = VAlign::Middle;
+        cv.Text(L"选择文件夹", m_dirR, dt, hasDir ? pal.ink700 : pal.ink300);
+    }
+
     // 音量滑条（自绘）：滑槽 + 填充 + 手柄 + 音量百分比
     {
         float vol = MusicPlayer::Instance().GetVolume();
@@ -1441,7 +1547,14 @@ void RoomView::PaintMusic(Canvas& cv)
     } else if (ps == MusicPlayer::State::Playing || ps == MusicPlayer::State::Paused) {
         std::wstring t = MusicPlayer::Instance().GetTitle();
         if (t.empty()) t = m_track;
-        cv.Text((ps == MusicPlayer::State::Playing ? L"正在播放：" : L"已暂停：") + t,
+        // 批次 B：连播计数（列表多于 1 首时显示 n/N）
+        std::wstring cnt;
+        size_t nn = MusicPlayer::Instance().Count(), ii = MusicPlayer::Instance().Index();
+        if (nn > 1) {
+            wchar_t cb[32]; swprintf_s(cb, L"（%zu/%zu · 连播）", ii + 1, nn);
+            cnt = cb;
+        }
+        cv.Text((ps == MusicPlayer::State::Playing ? L"正在播放：" : L"已暂停：") + t + cnt,
                 txtBox, nt, pal.ink900);
     } else if (ps == MusicPlayer::State::Error) {
         cv.Text(L"播放失败：未连上服务端或音频解码出错。", txtBox, nt, pal.ink500);
@@ -1598,6 +1711,87 @@ void RoomView::PaintFocusOverlay(Canvas& cv)
     m_overlayPause.Paint(cv);
     m_overlayCancel.Paint(cv);
 
+    // ---- 批次 B：专注界面音乐控制条（音量 / 暂停 / 切歌）----
+    // 屏幕坐标（覆盖层不随滚动）；rect 供 Update 命中（滞后一帧，可接受）
+    {
+        auto ps = MusicPlayer::Instance().GetState();
+        bool hasMusic = (ps != MusicPlayer::State::Idle) || MusicPlayer::Instance().Count() > 0;
+        if (hasMusic) {
+            float bw = 420.0f;
+            float bx0 = cx - bw * 0.5f;
+            float by = cy + 104.0f;
+
+            std::wstring t = MusicPlayer::Instance().GetTitle();
+            size_t nn = MusicPlayer::Instance().Count(), ii = MusicPlayer::Instance().Index();
+            if (!t.empty()) {
+                std::wstring cnt;
+                if (nn > 1) {
+                    wchar_t cb[32]; swprintf_s(cb, L"  ·  %zu/%zu", ii + 1, nn);
+                    cnt = cb;
+                }
+                TextStyle tt; tt.role = FontRole::Sans; tt.size = 11.5f; tt.hAlign = HAlign::Center;
+                cv.Text(L"♪ " + t + cnt, { m_area.left, by - 24.0f, m_area.right, by - 4.0f }, tt, pal.ink500);
+            }
+
+            m_ovPrev = { bx0, by, bx0 + 40.0f, by + 40.0f };
+            m_ovPlay = { bx0 + 50.0f, by - 5.0f, bx0 + 100.0f, by + 45.0f };
+            m_ovNext = { bx0 + 110.0f, by, bx0 + 150.0f, by + 40.0f };
+            m_ovVol  = { bx0 + 172.0f, by + 15.0f, bx0 + 312.0f, by + 25.0f };
+
+            // ⏮ ⏭ 圆钮（线段三角 + 竖线）
+            auto paintSkip = [&](const D2D1_RECT_F& r, bool forward) {
+                float ccy = (r.top + r.bottom) * 0.5f;
+                float ccx = (r.left + r.right) * 0.5f;
+                cv.FillCircle(ccx, ccy, 19.0f, pal.paperHi);
+                cv.StrokeCircle(ccx, ccy, 19.0f, pal.rule, shape::kHair);
+                float s = forward ? 1.0f : -1.0f;
+                float ax = ccx - 3.5f * s, ay = ccy - 6.0f;
+                float b2x = ccx + 5.0f * s, b2y = ccy;
+                float dx = ccx - 3.5f * s, dy = ccy + 6.0f;
+                cv.Line(ax, ay, b2x, b2y, pal.ink700, 1.8f);
+                cv.Line(b2x, b2y, dx, dy, pal.ink700, 1.8f);
+                cv.Line(dx, dy, ax, ay, pal.ink700, 1.8f);
+                float barX = ccx - 6.5f * s;
+                cv.Line(barX, ccy - 6.0f, barX, ccy + 6.0f, pal.ink700, 2.0f);
+            };
+            paintSkip(m_ovPrev, false);
+            paintSkip(m_ovNext, true);
+
+            // 播放/暂停大圆钮
+            bool playing = (ps == MusicPlayer::State::Playing);
+            float pcx = (m_ovPlay.left + m_ovPlay.right) * 0.5f;
+            float pcy = (m_ovPlay.top + m_ovPlay.bottom) * 0.5f;
+            cv.FillCircle(pcx, pcy, 23.0f, pal.seal);
+            if (playing) {
+                // 双竖线 = 暂停
+                cv.Line(pcx - 5.0f, pcy - 8.0f, pcx - 5.0f, pcy + 8.0f, pal.paperHi, 3.5f);
+                cv.Line(pcx + 5.0f, pcy - 8.0f, pcx + 5.0f, pcy + 8.0f, pal.paperHi, 3.5f);
+            } else {
+                // 三角 = 播放
+                cv.Line(pcx - 6.0f, pcy - 9.0f, pcx + 8.0f, pcy, pal.paperHi, 2.2f);
+                cv.Line(pcx + 8.0f, pcy, pcx - 6.0f, pcy + 9.0f, pal.paperHi, 2.2f);
+                cv.Line(pcx - 6.0f, pcy + 9.0f, pcx - 6.0f, pcy - 9.0f, pal.paperHi, 2.2f);
+            }
+
+            // 音量条（与音乐卡同款：槽 + 填充 + 手柄）
+            float vol = MusicPlayer::Instance().GetVolume();
+            float vp = (vol > 0.0f) ? sqrtf(vol) : 0.0f;
+            const auto& vr = m_ovVol;
+            float trackY = (vr.top + vr.bottom) * 0.5f;
+            cv.FillRoundRect({ vr.left, trackY - 2.0f, vr.right, trackY + 2.0f }, 2.0f,
+                             WithAlpha(pal.rule, 0.5f));
+            float fx = vr.left + (vr.right - vr.left) * vp;
+            if (fx > vr.left + 2.0f)
+                cv.FillRoundRect({ vr.left, trackY - 2.0f, fx, trackY + 2.0f }, 2.0f, pal.brass);
+            cv.FillCircle(fx, trackY, 5.0f, m_ovVolDrag ? pal.brass : pal.ink300);
+            cv.StrokeCircle(fx, trackY, 5.0f, pal.brass, 1.5f);
+            TextStyle vl; vl.role = FontRole::Mono; vl.size = 10.0f; vl.vAlign = VAlign::Middle;
+            cv.Text(L"音量", { vr.right + 10.0f, vr.top - 3.0f, vr.right + 70.0f, vr.bottom + 3.0f }, vl, pal.ink500);
+        } else {
+            m_ovPrev = m_ovPlay = m_ovNext = m_ovVol = { 0, 0, 0, 0 };
+        }
+    }
+
     cv.PopOpacity();
 }
 
@@ -1705,7 +1899,23 @@ void RoomView::PlayMusic()
         MusicPlayer::Instance().Toggle();     // 暂停 / 继续
         return;
     }
-    // 空闲或出错 → 重新选曲播放
+    // 空闲或出错 → 重新选曲播放。批次 B：本地优先——本地扫描列表非空
+    // 就用本地列表（连播）；否则回退云端房间曲目表。
+    auto local = ScanLocalMusic();
+    if (!local.empty()) {
+        // 用户在房间曲目里指定过 meta 曲目 → 在本地列表里按标题优先匹配
+        size_t idx = 0;
+        if (m_hasTrack && !m_track.empty()) {
+            for (size_t i = 0; i < local.size(); ++i) {
+                if (local[i].second == m_track) { idx = i; break; }
+            }
+        }
+        std::vector<MusicPlayer::Track> pl;
+        for (auto& t : local) pl.push_back({ t.first, t.second });
+        MusicPlayer::Instance().SetPlaylistAndPlay(std::move(pl), idx);
+        return;
+    }
+    // 云端曲目表
     std::wstring id, title;
     if (m_hasTrack && !m_track.empty()) {
         // 房间管理员设置的曲目（meta 是标题）→ 在曲目表里按标题匹配 id
@@ -1714,52 +1924,105 @@ void RoomView::PlayMusic()
         }
     }
     if (id.empty() && !m_music.empty()) { id = m_music[0].first; title = m_music[0].second; }
-
-    // P1-3：无云端曲目时，兜底播放 assets/media/music 里的第一首本地音乐
-    if (id.empty()) {
-        std::wstring local = FirstLocalMusic();
-        if (!local.empty()) {
-            size_t p = local.find_last_of(L"\\/");
-            title = (p == std::wstring::npos) ? local : local.substr(p + 1);
-            p = title.find_last_of(L'.');
-            if (p != std::wstring::npos) title = title.substr(0, p);
-            MusicPlayer::Instance().PlayLocal(local, title);
-            return;
-        }
-    }
     if (id.empty()) return;
-    MusicPlayer::Instance().Play(id, title);
+    std::vector<MusicPlayer::Track> pl;
+    for (auto& t : m_music) pl.push_back({ t.first, t.second });
+    MusicPlayer::Instance().SetPlaylistAndPlay(std::move(pl), 0);
 }
 
-std::wstring RoomView::FirstLocalMusic()
+std::wstring RoomView::MusicDirOrDefault()
 {
+    AppSettings s = CheckinStore::Instance().LoadSettings();
+    if (!s.musicDir.empty()) return s.musicDir;
+    // 回退：exe 目录下 assets\media\music（历史兜底目录）
     wchar_t buf[MAX_PATH] = { 0 };
     DWORD n = GetModuleFileNameW(nullptr, buf, MAX_PATH);
     std::wstring exe(buf, n);
     size_t pos = exe.find_last_of(L"\\/");
     std::wstring dir = (pos == std::wstring::npos) ? L"" : exe.substr(0, pos);
-    std::wstring root = dir + L"\\assets\\media\\music";
-    WIN32_FIND_DATAW fd{};
-    HANDLE h = FindFirstFileW((root + L"\\*").c_str(), &fd);
-    if (h == INVALID_HANDLE_VALUE) return L"";
-    std::wstring first;
-    do {
-        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
-        std::wstring name(fd.cFileName);
-        std::wstring ext;
-        size_t dot = name.find_last_of(L'.');
-        if (dot != std::wstring::npos) {
-            ext = name.substr(dot);
-            for (auto& c : ext) c = (wchar_t)std::towlower(c);
+    return dir + L"\\assets\\media\\music";
+}
+
+std::vector<std::pair<std::wstring, std::wstring>> RoomView::ScanLocalMusic()
+{
+    std::vector<std::pair<std::wstring, std::wstring>> out;
+    auto scanDir = [&out](const std::wstring& root) {
+        if (root.empty()) return;
+        WIN32_FIND_DATAW fd{};
+        HANDLE h = FindFirstFileW((root + L"\\*").c_str(), &fd);
+        if (h == INVALID_HANDLE_VALUE) return;
+        do {
+            if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+            std::wstring name(fd.cFileName);
+            std::wstring ext;
+            size_t dot = name.find_last_of(L'.');
+            if (dot != std::wstring::npos) {
+                ext = name.substr(dot);
+                for (auto& c : ext) c = (wchar_t)std::towlower(c);
+            }
+            if (ext != L".mp3" && ext != L".wav" && ext != L".ogg" && ext != L".flac" &&
+                ext != L".m4a" && ext != L".aac" && ext != L".wma") continue;
+            std::wstring title = (dot == std::wstring::npos) ? name : name.substr(0, dot);
+            out.push_back({ root + L"\\" + name, title });
+        } while (FindNextFileW(h, &fd));
+        FindClose(h);
+    };
+    // 用户设置目录优先；无（或扫不到）再补系统「音乐」库与历史兜底目录
+    std::vector<std::wstring> dirs;
+    AppSettings s = CheckinStore::Instance().LoadSettings();
+    if (!s.musicDir.empty()) dirs.push_back(s.musicDir);
+    wchar_t* mus = nullptr;
+    if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_Music, 0, nullptr, &mus))) {
+        dirs.push_back(mus);
+        CoTaskMemFree(mus);
+    }
+    wchar_t buf[MAX_PATH] = { 0 };
+    DWORD n = GetModuleFileNameW(nullptr, buf, MAX_PATH);
+    std::wstring exe(buf, n);
+    size_t pos = exe.find_last_of(L"\\/");
+    dirs.push_back((pos == std::wstring::npos) ? std::wstring() : exe.substr(0, pos) + L"\\assets\\media\\music");
+    for (auto& d : dirs) {
+        size_t before = out.size();
+        scanDir(d);
+        if (out.size() > before && !s.musicDir.empty()) break;   // 用户目录有货就不混入其他目录
+    }
+    return out;
+}
+
+void RoomView::PickMusicFolder()
+{
+    // IFileDialog 目录选择（COM 已由 OleInitialize 初始化）
+    IFileOpenDialog* dlg = nullptr;
+    HRESULT hr = CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER,
+                                  IID_PPV_ARGS(&dlg));
+    if (FAILED(hr) || !dlg) return;
+    DWORD opts = 0;
+    dlg->GetOptions(&opts);
+    dlg->SetOptions(opts | FOS_PICKFOLDERS);
+    dlg->SetTitle(L"选择背景音乐文件夹（扫描其中全部音频文件）");
+    if (SUCCEEDED(dlg->Show(AppHwnd()))) {
+        IShellItem* item = nullptr;
+        if (SUCCEEDED(dlg->GetResult(&item)) && item) {
+            PWSTR path = nullptr;
+            if (SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &path)) && path) {
+                AppSettings s = CheckinStore::Instance().LoadSettings();
+                s.musicDir = path;
+                CheckinStore::Instance().SaveSettings(s);
+                CoTaskMemFree(path);
+                ShowToast(L"已设置音乐文件夹，开始专注将自动连播其中的曲目");
+            }
+            item->Release();
         }
-        if (ext == L".mp3" || ext == L".wav" || ext == L".ogg" || ext == L".flac" ||
-            ext == L".m4a" || ext == L".aac" || ext == L".wma") {
-            first = root + L"\\" + name;
-            break;
-        }
-    } while (FindNextFileW(h, &fd));
-    FindClose(h);
-    return first;
+    }
+    dlg->Release();
+}
+
+void RoomView::AutoStartMusic()
+{
+    // 开始专注自动播放：空闲才起播；暂停中继续；正在播不打断。
+    auto ps = MusicPlayer::Instance().GetState();
+    if (ps == MusicPlayer::State::Idle || ps == MusicPlayer::State::Error) PlayMusic();
+    else if (ps == MusicPlayer::State::Paused) MusicPlayer::Instance().Toggle();
 }
 
 void RoomView::MusicVolumeFromX(float x)

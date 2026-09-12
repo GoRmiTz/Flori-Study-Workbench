@@ -16,9 +16,28 @@
 
 namespace lj {
 
+// ---- 批次 B：XAudio2 回调（仅 OnStreamEnd 关心：一首自然播完）----
+// 注意：回调在 XAudio2 音频线程触发，只碰 atomic，不做任何重活。
+namespace {
+class VoiceCb : public IXAudio2VoiceCallback
+{
+public:
+    std::atomic<bool>* ended = nullptr;
+    void OnStreamEnd() override { if (ended) ended->store(true, std::memory_order_release); }
+    void OnVoiceProcessingPassStart(UINT32) override {}
+    void OnVoiceProcessingPassEnd() override {}
+    void OnBufferStart(void*) override {}
+    void OnBufferEnd(void*) override {}
+    void OnLoopEnd(void*) override {}
+    void OnVoiceError(void*, HRESULT) override {}
+};
+VoiceCb s_voiceCb;
+} // namespace
+
 MusicPlayer& MusicPlayer::Instance()
 {
     static MusicPlayer s;
+    s_voiceCb.ended = &s.m_ended;   // 单例初始化后接线（幂等）
     return s;
 }
 
@@ -58,6 +77,7 @@ bool MusicPlayer::IsLocalPath(const std::wstring& id)
 void MusicPlayer::Play(const std::wstring& id, const std::wstring& title)
 {
     if (id.empty()) return;
+    m_ended.store(false, std::memory_order_release);   // 起播清结束标志
     PlayLocal(IsLocalPath(id) ? id : L"", title);   // local 路径交给 PlayLocal
     if (IsLocalPath(id)) return;
     // 停掉旧线程（join 等它退出），再清状态
@@ -78,6 +98,7 @@ void MusicPlayer::Play(const std::wstring& id, const std::wstring& title)
 void MusicPlayer::PlayLocal(const std::wstring& path, const std::wstring& title)
 {
     if (path.empty()) return;
+    m_ended.store(false, std::memory_order_release);   // 起播清结束标志
     // 停掉旧线程（join 等它退出），再清状态
     {
         m_stopReq.store(true, std::memory_order_release);
@@ -116,6 +137,7 @@ void MusicPlayer::Stop()
     if (m_thread.joinable()) m_thread.join();
     m_stopReq.store(false, std::memory_order_release);
     ReleaseVoice();
+    m_ended.store(false, std::memory_order_release);
     m_state.store((int)State::Idle, std::memory_order_release);
 }
 
@@ -249,14 +271,15 @@ void MusicPlayer::Worker(const std::wstring& id, const std::wstring& title, bool
         wf.nBlockAlign = (WORD)(channels * bits / 8);
         wf.nAvgBytesPerSec = rate * wf.nBlockAlign;
 
-        xr = m_xa->CreateSourceVoice(&m_voice, &wf);
+        xr = m_xa->CreateSourceVoice(&m_voice, &wf, 0, XAUDIO2_DEFAULT_FREQ_RATIO, &s_voiceCb);
         if (FAILED(xr)) { m_state.store((int)State::Error, std::memory_order_release); return; }
 
         m_pcm = std::move(pcm);   // 缓冲必须存活至 voice 销毁
         XAUDIO2_BUFFER ab{};
         ab.AudioBytes = (UINT32)m_pcm.size();
         ab.pAudioData = m_pcm.data();
-        ab.LoopCount = XAUDIO2_LOOP_INFINITE;   // 背景音乐循环
+        // 批次 B：不再单曲无限循环——播完触发 OnStreamEnd → Pump 自动连播下一首
+        ab.LoopCount = 0;
         xr = m_voice->SubmitSourceBuffer(&ab);
         if (FAILED(xr)) { m_state.store((int)State::Error, std::memory_order_release); return; }
 
@@ -264,6 +287,98 @@ void MusicPlayer::Worker(const std::wstring& id, const std::wstring& title, bool
         m_voice->Start();
         m_state.store((int)State::Playing, std::memory_order_release);
     }
+}
+
+// ============================================================
+//  批次 B：播放列表 / 连播（全部 UI 线程调用；m_ended 只在音频线程置位）
+// ============================================================
+void MusicPlayer::SetPlaylist(std::vector<Track> pl)
+{
+    std::lock_guard<std::mutex> lk(m_plMu);
+    m_playlist = std::move(pl);
+    if (m_index >= m_playlist.size()) m_index = 0;
+}
+
+void MusicPlayer::SetPlaylistAndPlay(std::vector<Track> pl, size_t index)
+{
+    Track t;
+    {
+        std::lock_guard<std::mutex> lk(m_plMu);
+        if (pl.empty()) { m_playlist.clear(); m_index = 0; return; }
+        m_playlist = std::move(pl);
+        m_index = (index < m_playlist.size()) ? index : 0;
+        t = m_playlist[m_index];
+    }
+    Play(t.id, t.title);
+}
+
+void MusicPlayer::PlayIndex(size_t index)
+{
+    Track t;
+    {
+        std::lock_guard<std::mutex> lk(m_plMu);
+        if (index >= m_playlist.size()) return;
+        m_index = index;
+        t = m_playlist[index];
+    }
+    Play(t.id, t.title);
+}
+
+void MusicPlayer::Next()
+{
+    Track t;
+    {
+        std::lock_guard<std::mutex> lk(m_plMu);
+        if (m_playlist.empty()) return;
+        m_index = (m_index + 1) % m_playlist.size();
+        t = m_playlist[m_index];
+    }
+    Play(t.id, t.title);
+}
+
+void MusicPlayer::Prev()
+{
+    Track t;
+    {
+        std::lock_guard<std::mutex> lk(m_plMu);
+        if (m_playlist.empty()) return;
+        m_index = (m_index == 0) ? m_playlist.size() - 1 : m_index - 1;
+        t = m_playlist[m_index];
+    }
+    Play(t.id, t.title);
+}
+
+size_t MusicPlayer::Index() const
+{
+    std::lock_guard<std::mutex> lk(m_plMu);
+    return m_index;
+}
+
+size_t MusicPlayer::Count() const
+{
+    std::lock_guard<std::mutex> lk(m_plMu);
+    return m_playlist.size();
+}
+
+std::vector<MusicPlayer::Track> MusicPlayer::Playlist() const
+{
+    std::lock_guard<std::mutex> lk(m_plMu);
+    return m_playlist;
+}
+
+void MusicPlayer::Pump()
+{
+    // 自然播完 → 自动连播下一首（回卷）。手动 Stop/切歌会把 ended 清回 false。
+    if (!m_ended.exchange(false, std::memory_order_acq_rel)) return;
+    if (!m_autoNext.load(std::memory_order_acquire)) return;
+    Track t;
+    {
+        std::lock_guard<std::mutex> lk(m_plMu);
+        if (m_playlist.empty()) return;
+        m_index = (m_index + 1) % m_playlist.size();
+        t = m_playlist[m_index];
+    }
+    Play(t.id, t.title);
 }
 
 } // namespace lj

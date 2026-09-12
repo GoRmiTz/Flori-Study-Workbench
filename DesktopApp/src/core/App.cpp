@@ -35,6 +35,7 @@
 #include "views/LoginView.h"
 #include "core/Hwnd.h"
 #include "ui/FloatingPlayer.h"   // #49 全局浮空音乐播放器（跨页常驻）
+#include "audio/MusicPlayer.h"   // 批次 B：连播泵（Pump 每帧）
 
 #include <windowsx.h>
 
@@ -629,6 +630,9 @@ void App::Frame()
     }
 
     m_router.Update(dt, viewIn);
+
+    // 背景音乐连播泵：UI 线程每帧检查「自然播完」并自动切下一首
+    MusicPlayer::Instance().Pump();
 
     float scroll = m_router.Current() ? m_router.Current()->ScrollY() : 0.0f;
     m_dust.Update(dt, W, H, scroll);

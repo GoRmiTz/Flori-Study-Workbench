@@ -59,6 +59,10 @@ struct AppSettings
     int         reviewNudgeHour = 21;    // 提醒时刻（24h，默认 21:00 收工前）
     std::wstring reviewNudgeLast;        // 已提醒日期 YYYY-MM-DD（跨重启去重）
 
+    // ---- 自习室背景音乐（批次 B：本地优先）----
+    // 用户选择的本地音乐文件夹；空 = 回退 assets/media/music 与系统「音乐」库。
+    std::wstring musicDir;
+
     // ---- 关闭按钮行为 ----
     // 0 = 每次询问（弹自绘确认层）1 = 直接退出 2 = 最小化到托盘
     int exitAction = 0;

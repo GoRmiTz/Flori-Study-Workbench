@@ -51,6 +51,7 @@ public:
     void Paint(Canvas& cv) override;
     // 截图自检：--shot --route room --preview 直接铺开白名单弹层
     void DebugForcePreview() override;
+    void DebugForceOpen() override;    // 截图自检：强制专注中（覆盖层 + 音乐控制条）
 
 private:
     enum class TimerState { Idle, Running, Paused };
@@ -102,7 +103,12 @@ private:
     int         CurrentArrangementIndex() const;   // 当前时段匹配打卡项下标；无则 -1
     static std::wstring FmtClock(long long epoch);
     static int ParseSlot(const std::wstring& hhmm);
-    static std::wstring FirstLocalMusic();   // P1-3 兜底：扫描 assets/media/music 第一首支持的音频
+    // 批次 B：本地优先。扫描音乐目录（settings.musicDir 优先，回退
+    // assets/media/music 与系统「音乐」库），返回 {路径, 标题} 全部曲目
+    static std::vector<std::pair<std::wstring, std::wstring>> ScanLocalMusic();
+    static std::wstring MusicDirOrDefault();   // 用户设置目录 → 默认 assets\media\music
+    void PickMusicFolder();                    // 「选择文件夹」：IFileDialog 选目录并落盘
+    void AutoStartMusic();                     // 开始专注时自动播放（空闲才起播，暂停则继续）
 
     // ---- 模式 ----
     bool m_inRoom = true;          // 默认进入「公共自习室」
@@ -169,6 +175,13 @@ private:
     Button m_musicBtn;              // 音乐卡「播放/暂停」按钮
     D2D1_RECT_F m_volRect{};        // 音量滑条区域（note 内右侧）
     bool  m_volDrag = false;        // 正在拖动音量
+    D2D1_RECT_F m_prevR{};          // 音乐卡 ⏮（批次 B 连播）
+    D2D1_RECT_F m_nextR{};          // 音乐卡 ⏭
+    D2D1_RECT_F m_dirR{};           // 「选择文件夹」小按钮
+    // 专注覆盖层音乐控制条（批次 B：需求 3 —— 专注界面可调音量/暂停/切歌）
+    D2D1_RECT_F m_ovPrev{};  D2D1_RECT_F m_ovPlay{};  D2D1_RECT_F m_ovNext{};
+    D2D1_RECT_F m_ovVol{};          // 覆盖层音量滑条
+    bool  m_ovVolDrag = false;
     void PlayMusic();               // 播放 meta 匹配的曲目（无匹配取第一首）；暂停→继续
     void MusicVolumeFromX(float x); // 按滑条内 x 坐标换算音量并应用
 
