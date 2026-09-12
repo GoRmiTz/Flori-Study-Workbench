@@ -86,6 +86,24 @@ private:
     int   m_newHighlight = -1;      // 新建高亮下标（盒架/题集架）
     int   m_hoverCard = -1;          // 盒内 hover 卡（浮起）
 
+    // ---- G3：T5 抽卡动效 ----
+    float m_popT = 1.0f;             // 弹卡计时（0→0.45s：盖子开 + 卡飞出）
+    float m_flipT = 1.0f;            // 翻面计时（0→0.28s：rotateY 模拟）
+    // ---- G3：T10 反馈闭环（记住了 / 答错了）----
+    D2D1_RECT_F m_remRect{}, m_wrongRect{};
+    // ---- G3：T4 卡片拖拽跨盒 ----
+    bool  m_dragging = false;
+    int   m_dragIdx = -1;
+    float m_dragX = 0.0f, m_dragY = 0.0f;
+    float m_dragStartX = 0.0f, m_dragStartY = 0.0f;
+    bool  m_moveOpen = false;        // 「移动到题盒」浮层
+    std::vector<std::wstring> m_moveBoxIds;
+    std::vector<std::wstring> m_moveBoxNames;
+    std::vector<D2D1_RECT_F>  m_moveRects;
+    D2D1_RECT_F m_movePanel{};
+    void StartDraw();                 // 抽一张（重置弹卡动画）
+    float CardHeat(const QCard& c) const;   // 红警示 0..1
+
     D2D1_RECT_F m_area{};
     Canvas* m_cv = nullptr;
     float m_t = 0.0f;

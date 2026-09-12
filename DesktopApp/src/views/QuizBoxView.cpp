@@ -355,9 +355,23 @@ void QuizBoxView::DrawBox(Canvas& cv, float s)
                 }
             };
             D2D1_COLOR_F dc2 = diffColor(cd.difficulty);
+            // G3 T10：红警示（重复答错 + 久未复习 → 边框渐变朱砂正红）
+            float heat = CardHeat(cd);
+            if (heat > 0.05f) {
+                dc2.r = dc2.r + (pal.vermilion.r - dc2.r) * heat;
+                dc2.g = dc2.g + (pal.vermilion.g - dc2.g) * heat;
+                dc2.b = dc2.b + (pal.vermilion.b - dc2.b) * heat;
+                dc2.a = 1.0f;
+            }
             cv.PaperCard(row, hot ? 2.5f : 1.5f);
             cv.FillRect({ row.left, row.top, row.left + 3.0f, row.bottom }, WithAlpha(dc2, 0.85f));
             cv.StrokeRoundRect(row, shape::kEdge, WithAlpha(dc2, hot ? 1.0f : 0.45f), shape::kHair);
+            if (heat > 0.5f) {
+                // 高警示：卡面淡红 wash + ⚠ 标记
+                cv.FillRoundRect(row, shape::kEdge, WithAlpha(pal.vermilion, 0.06f * heat));
+                TextStyle wt; wt.size = 12.0f; wt.vAlign = VAlign::Middle;
+                cv.Text(L"⚠", { row.left + 6.0f, row.top, row.left + 24.0f, row.bottom }, wt, pal.vermilion);
+            }
             TextStyle ft; ft.size = 13.5f; ft.role = FontRole::Sans; ft.vAlign = VAlign::Middle;
             ft.weight = DWRITE_FONT_WEIGHT_SEMI_BOLD;
             std::wstring front = cd.front.empty() ? L"（无题面）" : cd.front;
@@ -390,13 +404,86 @@ void QuizBoxView::DrawBox(Canvas& cv, float s)
     at.hAlign = HAlign::Center; at.vAlign = VAlign::Middle; at.letterSpacing = 1.0f;
     cv.Text(L"＋ 添加卡片（题面 / 答案 / 标签 / 难度）", m_addBtn, at, pal.seal);
 
+    // ---- G3 T4：拖拽中「移动到题盒」浮层（顶部横排目标盒）----
+    if (m_moveOpen && !m_moveBoxIds.empty()) {
+        m_moveRects.clear();
+        float fpx = x0, fpy = y0 + 62.0f;
+        cv.FillRoundRect({ x0 - 8.0f, fpy - 8.0f, x0 + contentW + 8.0f, fpy + 52.0f },
+                         6.0f, pal.paperHi);
+        cv.StrokeRoundRect({ x0 - 8.0f, fpy - 8.0f, x0 + contentW + 8.0f, fpy + 52.0f },
+                           6.0f, pal.seal, shape::kHair);
+        TextStyle fl; fl.role = FontRole::Mono; fl.size = 10.0f; fl.letterSpacing = 1.5f;
+        fl.weight = DWRITE_FONT_WEIGHT_BOLD; fl.vAlign = VAlign::Middle;
+        cv.Text(L"移动到 ▸", { fpx, fpy, fpx + 78.0f, fpy + 44.0f }, fl, pal.seal);
+        float bx2 = fpx + 88.0f;
+        for (size_t i = 0; i < m_moveBoxIds.size(); ++i) {
+            float bw2 = 110.0f;
+            D2D1_RECT_F br{ bx2, fpy + 6.0f, bx2 + bw2, fpy + 42.0f };
+            m_moveRects.push_back(br);
+            cv.FillRoundRect(br, 5.0f, WithAlpha(pal.jade, 0.14f));
+            cv.StrokeRoundRect(br, 5.0f, pal.jade, shape::kHair);
+            TextStyle mt; mt.size = 12.0f; mt.role = FontRole::Sans;
+            mt.hAlign = HAlign::Center; mt.vAlign = VAlign::Middle;
+            std::wstring nm = m_moveBoxNames[i];
+            if (nm.size() > 7) nm = nm.substr(0, 7) + L"…";
+            cv.Text(nm, br, mt, pal.jade);
+            bx2 += bw2 + 10.0f;
+        }
+    }
+
+    // ---- G3 T4：拖拽跟随小卡（半透明，跟随鼠标）----
+    if (m_dragging && m_dragIdx >= 0 && m_dragIdx < (int)b.cards.size()) {
+        const auto& dc3 = b.cards[m_dragIdx];
+        D2D1_RECT_F mini{ m_dragX - 110.0f, m_dragY - 20.0f, m_dragX + 110.0f, m_dragY + 22.0f };
+        cv.PushOpacity(0.88f);
+        cv.FillRoundRect(mini, 5.0f, pal.paperHi);
+        cv.StrokeRoundRect(mini, 5.0f, pal.seal, shape::kHair);
+        TextStyle mt; mt.size = 12.0f; mt.role = FontRole::Sans;
+        mt.hAlign = HAlign::Center; mt.vAlign = VAlign::Middle;
+        std::wstring fr = dc3.front;
+        if (fr.size() > 16) fr = fr.substr(0, 16) + L"…";
+        cv.Text(fr, mini, mt, pal.ink900);
+        cv.PopOpacity();
+    }
+
     cv.PopTransform();
     cv.PopOpacity();
 }
 
 // ============================================================
-//  抽卡（V_DRAW）
+//  抽卡（V_DRAW）—— G3 T5：盒子特写 + 盖子打开 + 卡片弹出 +
+//  翻面（rotateY 模拟）+ 记住/答错反馈（T10 闭环）
 // ============================================================
+void QuizBoxView::StartDraw()
+{
+    if (m_curSet < 0 || m_curSet >= (int)m_sets.size()) return;
+    const auto& st = m_sets[m_curSet];
+    if (m_curBox < 0 || m_curBox >= (int)st.boxes.size()) return;
+    const auto& b = st.boxes[m_curBox];
+    if (b.cards.empty()) return;
+    m_drawIdx = rand() % (int)b.cards.size();
+    m_flip = false;
+    m_flipT = 1.0f;
+    m_popT = 0.0f;       // 重新弹卡
+    m_view = V_DRAW;
+    m_viewT = 0.0f;
+}
+
+// T10：红警示热度 0..1（重复答错 + 长期未复习双因子）
+float QuizBoxView::CardHeat(const QCard& c) const
+{
+    float wrong = (std::min)(1.0f, c.wrongCount / 3.0f);               // 错 3 次 = 满格
+    float stale = 0.0f;
+    if (c.lastReview > 0) {
+        long long days = ((long long)time(nullptr) - c.lastReview) / 86400;
+        stale = (std::min)(1.0f, days / 14.0f);                        // 14 天未复习 = 满格
+    } else if (c.added > 0) {
+        long long days = ((long long)time(nullptr) - c.added) / 86400;
+        stale = (std::min)(1.0f, days / 21.0f);                        // 从未复习：21 天满格
+    }
+    return Clamp01(wrong * 0.45f + stale * 0.55f);
+}
+
 void QuizBoxView::DrawDraw(Canvas& cv, float s)
 {
     if (m_curSet < 0 || m_curSet >= (int)m_sets.size()) { m_view = V_SETS; return; }
@@ -412,9 +499,7 @@ void QuizBoxView::DrawDraw(Canvas& cv, float s)
     float y0 = m_area.top + 30.0f;
 
     float va = ViewAlpha(m_viewT);
-    float slide = (1.0f - ease::OutCubic(va)) * 16.0f;
     cv.PushOpacity(va);
-    cv.PushTransform(D2D1::Matrix3x2F::Translation(0.0f, slide));
 
     m_backDrawRect = { x0, y0, x0 + 120.0f, y0 + 38.0f };
     cv.FillRoundRect(m_backDrawRect, 6.0f, pal.paperLo);
@@ -424,13 +509,77 @@ void QuizBoxView::DrawDraw(Canvas& cv, float s)
     cv.Text(L"◀ 放回", m_backDrawRect, bt, pal.ink700);
     TextStyle hs; hs.role = FontRole::Mono; hs.size = 11.0f; hs.letterSpacing = 2.0f;
     hs.weight = DWRITE_FONT_WEIGHT_BOLD; hs.vAlign = VAlign::Middle; hs.hAlign = HAlign::Center;
-    cv.Text(m_flip ? L"回 顾 · 答 案" : L"回 顾 · 题 面",
-            { x0, y0, x0 + contentW, y0 + 38.0f }, hs, pal.seal);
+    cv.Text(b.name.c_str(), { x0, y0, x0 + contentW, y0 + 38.0f }, hs, pal.seal);
 
-    float cy0 = y0 + 70.0f, ch = 300.0f;
-    D2D1_RECT_F card{ x0, cy0, x0 + contentW, cy0 + ch };
+    // ---- T5：盒子特写（左下角小盒子 + 盖子打开动画）----
+    float bk = Clamp01(m_popT / 0.25f);   // 盖子开度 0..1
+    {
+        D2D1_RECT_F boxR{ x0 + 26.0f, y0 + 66.0f, x0 + 116.0f, y0 + 176.0f };
+        DrawBoxIcon(cv, boxR, WithAlpha(pal.seal, 0.5f), b.kind == 1);
+        // 盖子打开：盖沿上抬（简单位移模拟）
+        if (bk < 1.0f) {
+            float lift = bk * 16.0f;
+            cv.FillRoundRect({ boxR.left - 6.0f, boxR.top - 24.0f - lift + bk * 8.0f,
+                               boxR.right + 6.0f, boxR.top - 8.0f - lift + bk * 8.0f },
+                             4.0f, WithAlpha(pal.seal, 0.3f * (1.0f - bk)));
+        }
+    }
+
+    // ---- T5：卡片从盒口飞出到中央（0.15~0.45s）----
+    float pop = Clamp01((m_popT - 0.15f) / 0.3f);
+    float pe = ease::OutBack(pop);
+    float cy0 = y0 + 74.0f, ch = 290.0f;
+    // 起点：盒口；终点：中央
+    float sx0 = x0 + 40.0f, sy0 = y0 + 100.0f;
+    float fx = x0 + (contentW - 0.0f) * 0.5f;   // 卡中心目标
+    float cardX = x0 + 24.0f + (contentW - 48.0f) * 0.0f;
+    float fromCx = sx0, toCx = x0 + contentW * 0.5f;
+    float curCx = fromCx + (toCx - fromCx) * pe;
+    float curCy = sy0 + (cy0 + ch * 0.5f - sy0) * pe;
+    float scale = 0.28f + 0.72f * pe;
+    float alpha = Clamp01(pop * 1.4f);
+    float tilt = (1.0f - pe) * -8.0f;            // 飞出途中带 -8° 倾斜回落
+
+    // ---- 翻面（rotateY 模拟：水平缩放 1→0→1）----
+    float flipK = Clamp01(m_flipT / 0.28f);
+    bool showBack = m_flip;
+    float sx = m_flip ? (showBack ? flipK : 1.0f) : (showBack ? 1.0f : 1.0f);
+    // 正在翻（m_flipT<1）时：前半正面压缩，后半背面展开
+    float scaleX = 1.0f;
+    if (m_flipT < 1.0f) {
+        float t = m_flipT / 0.28f;
+        scaleX = std::fabs(1.0f - 2.0f * t);      // 1→0→1
+        showBack = (t > 0.5f) ? m_flip : !m_flip;
+    }
+
+    cv.PushTransform(D2D1::Matrix3x2F::Scale(scale * scaleX, scale,
+                                            D2D1::Point2F(curCx, curCy)));
+    cv.PushOpacity(alpha);
+
+    float hw = contentW * 0.5f;   // 卡半宽（未缩放）
+    D2D1_RECT_F card{ curCx - hw, curCy - ch * 0.5f, curCx + hw, curCy + ch * 0.5f };
     cv.PaperCard(card, 2.0f);
-    cv.DoubleFrame(card, WithAlpha(pal.seal, m_flip ? 0.5f : 0.8f));
+    // 难度边框色 + 红警示（T10：heat 高时边框转朱砂正红）
+    auto diffColor = [&](int d) -> D2D1_COLOR_F {
+        switch (d) {
+        case 1: case 2: return pal.jade;
+        case 3: return pal.brass;
+        case 4: return pal.seal;
+        default: return pal.vermilion;
+        }
+    };
+    float heat = CardHeat(cd);
+    D2D1_COLOR_F edge = diffColor(cd.difficulty);
+    if (heat > 0.05f) {
+        // lerp 边框色 → 朱砂
+        edge.r = edge.r + (pal.vermilion.r - edge.r) * heat;
+        edge.g = edge.g + (pal.vermilion.g - edge.g) * heat;
+        edge.b = edge.b + (pal.vermilion.b - edge.b) * heat;
+        edge.a = 1.0f;
+    }
+    cv.StrokeRoundRect(card, shape::kEdge, WithAlpha(edge, 0.9f), 1.6f);
+    cv.DoubleFrame(card, WithAlpha(pal.seal, 0.35f));
+
     if (!cd.tag.empty()) {
         D2D1_RECT_F badge{ card.right - 130.0f, card.top + 16.0f, card.right - 26.0f, card.top + 42.0f };
         cv.FillRoundRect(badge, 11.0f, WithAlpha(pal.jade, 0.14f));
@@ -438,44 +587,71 @@ void QuizBoxView::DrawDraw(Canvas& cv, float s)
         bgt.hAlign = HAlign::Center; bgt.vAlign = VAlign::Middle;
         cv.Text(L"#" + cd.tag, badge, bgt, pal.jade);
     }
-    // 难度方块
-    for (int d = 0; d < 5; ++d) {
+    for (int d = 0; d < 5; ++d)
         cv.FillRect({ card.left + 26.0f + d * 12.0f, card.top + 26.0f,
                       card.left + 26.0f + d * 12.0f + 8.0f, card.top + 36.0f },
-                    d < cd.difficulty ? pal.seal : WithAlpha(pal.rule, 0.5f));
+                    d < cd.difficulty ? edge : WithAlpha(pal.rule, 0.5f));
+    // 红警示徽标（T10）
+    if (heat > 0.5f) {
+        D2D1_RECT_F hb{ card.left + 22.0f, card.top + 46.0f, card.left + 168.0f, card.top + 70.0f };
+        cv.FillRoundRect(hb, 10.0f, WithAlpha(pal.vermilion, 0.16f));
+        TextStyle ht; ht.size = 10.5f; ht.role = FontRole::Mono;
+        ht.hAlign = HAlign::Center; ht.vAlign = VAlign::Middle;
+        cv.Text(L"⚠ 需要维护 · 久未复习", hb, ht, pal.vermilion);
     }
+
     float tx0 = card.left + 34.0f, tx1 = card.right - 34.0f;
-    if (!m_flip) {
+    if (!showBack) {
         TextStyle lb; lb.role = FontRole::Mono; lb.size = 11.0f;
-        cv.Text(L"题 面", { tx0, card.top + 52.0f, tx1, card.top + 74.0f }, lb, pal.ink300);
+        cv.Text(L"题 面", { tx0, card.top + 78.0f, tx1, card.top + 100.0f }, lb, pal.ink300);
         TextStyle ft; ft.role = FontRole::Serif; ft.size = 20.0f;
         ft.weight = DWRITE_FONT_WEIGHT_SEMI_BOLD; ft.vAlign = VAlign::Middle;
         cv.Text(cd.front.empty() ? L"（无题面）" : cd.front,
-                { tx0, card.top + 78.0f, tx1, card.bottom - 30.0f }, ft, pal.ink900);
+                { tx0, card.top + 104.0f, tx1, card.bottom - 30.0f }, ft, pal.ink900);
     } else {
         TextStyle lb; lb.role = FontRole::Mono; lb.size = 11.0f;
-        cv.Text(L"答 案", { tx0, card.top + 52.0f, tx1, card.top + 74.0f }, lb, pal.seal);
+        cv.Text(L"答 案", { tx0, card.top + 78.0f, tx1, card.top + 100.0f }, lb, pal.seal);
         TextStyle ft; ft.role = FontRole::Serif; ft.size = 19.0f;
         ft.vAlign = VAlign::Middle;
         cv.Text(cd.back.empty() ? L"（未填写答案）" : cd.back,
-                { tx0, card.top + 78.0f, tx1, card.bottom - 30.0f }, ft, pal.ink900);
+                { tx0, card.top + 104.0f, tx1, card.bottom - 30.0f }, ft, pal.ink900);
+    }
+    cv.PopOpacity();
+    cv.PopTransform();   // 弹卡缩放
+
+    // 弹卡完成后才显示操作按钮
+    if (pop >= 0.999f) {
+        float by = cy0 + ch + 18.0f;
+        m_flipRect = { x0 + contentW * 0.5f - 240.0f, by, x0 + contentW * 0.5f - 80.0f, by + 46.0f };
+        m_nextRect = { x0 + contentW * 0.5f + 90.0f, by, x0 + contentW * 0.5f + 250.0f, by + 46.0f };
+        // T10 反馈：记住了（jade）/ 答错了（朱砂）——翻面后出现
+        if (m_flipT >= 1.0f && showBack) {
+            m_remRect   = { x0 + contentW * 0.5f - 66.0f, by, x0 + contentW * 0.5f + 66.0f, by + 46.0f };
+            m_wrongRect = { x0 + contentW * 0.5f - 190.0f, by, x0 + contentW * 0.5f - 78.0f, by + 46.0f };
+        } else {
+            m_remRect = m_wrongRect = { 0, 0, 0, 0 };
+        }
+        auto BigBtn = [&](const D2D1_RECT_F& r, const wchar_t* label, const D2D1_COLOR_F& fill,
+                          const D2D1_COLOR_F& fg) {
+            if (r.right <= r.left) return;
+            cv.FillRoundRect(r, 8.0f, fill);
+            cv.StrokeRoundRect(r, 8.0f, fill, shape::kHair);
+            TextStyle bs; bs.size = 13.5f; bs.role = FontRole::Sans;
+            bs.weight = DWRITE_FONT_WEIGHT_SEMI_BOLD;
+            bs.hAlign = HAlign::Center; bs.vAlign = VAlign::Middle; bs.letterSpacing = 1.0f;
+            cv.Text(label, r, bs, fg);
+        };
+        BigBtn(m_flipRect, showBack ? L"◀ 看题面" : L"翻面看答案",
+               showBack ? pal.paperLo : pal.seal, showBack ? pal.ink700 : pal.paperHi);
+        if (showBack) {
+            BigBtn(m_remRect,   L"✓ 记住了", pal.jade, pal.paperHi);
+            BigBtn(m_wrongRect, L"✗ 答错了", pal.vermilion, pal.paperHi);
+        }
+        BigBtn(m_nextRect, L"下一张 ▶", pal.paperLo, pal.ink700);
+    } else {
+        m_flipRect = m_nextRect = m_remRect = m_wrongRect = { 0, 0, 0, 0 };
     }
 
-    float by = cy0 + ch + 26.0f;
-    m_flipRect = { x0 + contentW * 0.5f - 240.0f, by, x0 + contentW * 0.5f - 80.0f, by + 48.0f };
-    m_nextRect = { x0 + contentW * 0.5f - 60.0f, by, x0 + contentW * 0.5f + 100.0f, by + 48.0f };
-    auto BigBtn = [&](const D2D1_RECT_F& r, const wchar_t* label, bool primary) {
-        cv.FillRoundRect(r, 8.0f, primary ? pal.seal : pal.paperLo);
-        cv.StrokeRoundRect(r, 8.0f, primary ? pal.seal : pal.rule, shape::kHair);
-        TextStyle bs; bs.size = 14.0f; bs.role = FontRole::Sans;
-        bs.weight = DWRITE_FONT_WEIGHT_SEMI_BOLD;
-        bs.hAlign = HAlign::Center; bs.vAlign = VAlign::Middle; bs.letterSpacing = 1.0f;
-        cv.Text(label, r, bs, primary ? pal.paperHi : pal.ink700);
-    };
-    BigBtn(m_flipRect, m_flip ? L"◀ 看题面" : L"翻面看答案", !m_flip);
-    if (m_flip) BigBtn(m_nextRect, L"下一张 ▶", true);
-
-    cv.PopTransform();
     cv.PopOpacity();
 }
 
@@ -699,6 +875,13 @@ void QuizBoxView::Update(float dt, const Input& in)
     float s = ScrollY();
     float mx = in.mouseX, my = in.mouseY + s;
 
+    // G3 动效计时：弹卡 / 翻面
+    m_popT += dt;
+    if (m_flipT < 1.0f) {
+        m_flipT += dt;
+        if (m_flipT > 1.0f) m_flipT = 1.0f;
+    }
+
     // ---- 制卡弹窗独占 ----
     if (m_ceOpen) {
         if (m_cv) {
@@ -763,6 +946,58 @@ void QuizBoxView::Update(float dt, const Input& in)
     if (m_view == V_BOX) {
         for (size_t i = 0; i < m_cardRects.size(); ++i)
             if (InRect(m_cardRects[i], mx, my)) { m_hoverCard = (int)i; m_overInteractive = true; break; }
+    }
+
+    // ---- G3 T4：卡片拖拽跨盒（按住卡片行拖动 >8px → 跟随小卡 + 目标盒浮层）----
+    if (m_view == V_BOX) {
+        if (in.pressed && !m_dragging) {
+            int hit = -1;
+            for (size_t i = 0; i < m_cardRects.size(); ++i)
+                if (InRect(m_cardRects[i], mx, my)) { hit = (int)i; break; }
+            if (hit >= 0) { m_dragIdx = hit; m_dragStartX = mx; m_dragStartY = my; }
+        }
+        if (!m_dragging && m_dragIdx >= 0 && in.pressed &&
+            (std::fabs(mx - m_dragStartX) > 8.0f || std::fabs(my - m_dragStartY) > 8.0f)) {
+            m_dragging = true;
+            m_moveOpen = true;
+            m_moveBoxIds.clear(); m_moveBoxNames.clear();
+            if (m_curSet >= 0 && m_curSet < (int)m_sets.size()) {
+                const auto& st3 = m_sets[m_curSet];
+                if (m_curBox >= 0 && m_curBox < (int)st3.boxes.size()) {
+                    const auto& fromId = st3.boxes[m_curBox].id;
+                    for (const auto& b3 : st3.boxes)
+                        if (b3.id != fromId) {
+                            m_moveBoxIds.push_back(b3.id);
+                            m_moveBoxNames.push_back(b3.name);
+                        }
+                }
+            }
+        }
+        if (m_dragging) {
+            m_dragX = mx; m_dragY = my;
+            if (in.released) {
+                bool moved = false;
+                if (m_curSet >= 0 && m_curSet < (int)m_sets.size() && m_curBox >= 0
+                    && m_curBox < (int)m_sets[m_curSet].boxes.size()) {
+                    const auto& b3 = m_sets[m_curSet].boxes[m_curBox];
+                    if (m_dragIdx >= 0 && m_dragIdx < (int)b3.cards.size()) {
+                        for (size_t i = 0; i < m_moveRects.size(); ++i)
+                            if (InRect(m_moveRects[i], mx, my)) {
+                                BoxStore::Instance().MoveCard(b3.id, b3.cards[m_dragIdx].id,
+                                                              m_moveBoxIds[i]);
+                                m_sets = BoxStore::Instance().Load();
+                                Toast(L"已移动到：" + m_moveBoxNames[i]);
+                                moved = true;
+                                break;
+                            }
+                    }
+                }
+                (void)moved;
+                m_dragging = false; m_moveOpen = false; m_dragIdx = -1;
+            }
+            return;   // 拖拽中独占输入
+        }
+        if (!in.pressed && !in.released) m_dragIdx = -1;   // 未构成拖拽的按压释放
     }
 
     if (!in.clicked) return;
@@ -838,9 +1073,7 @@ void QuizBoxView::Update(float dt, const Input& in)
         if (InRect(m_backRect, mx, my)) { m_view = V_BOXES; m_viewT = 0.0f; return; }
         if (InRect(m_drawBtn, mx, my)) {
             if (b.cards.empty()) { Toast(L"盒是空的，先加几张卡"); return; }
-            m_drawIdx = rand() % (int)b.cards.size();
-            m_flip = false;
-            m_view = V_DRAW; m_viewT = 0.0f;
+            StartDraw();   // G3：带弹卡动画
             return;
         }
         if (InRect(m_addBtn, mx, my)) { OpenCardEditor(nullptr); return; }
@@ -874,12 +1107,40 @@ void QuizBoxView::Update(float dt, const Input& in)
         }
     } else if (m_view == V_DRAW) {
         if (InRect(m_backDrawRect, mx, my)) { m_view = V_BOX; m_viewT = 0.0f; return; }
-        if (InRect(m_flipRect, mx, my)) { m_flip = !m_flip; return; }
-        if (m_flip && InRect(m_nextRect, mx, my)) {
-            const auto& b = m_sets[m_curSet].boxes[m_curBox];
-            if (!b.cards.empty()) { m_drawIdx = rand() % (int)b.cards.size(); m_flip = false; }
+        // 翻面（带 rotateY 动画）
+        if (InRect(m_flipRect, mx, my)) {
+            m_flip = !m_flip;
+            m_flipT = 0.0f;   // 触发翻面动画
             return;
         }
+        // T10 反馈：记住了 / 答错了（翻面后可用）
+        if (m_curSet >= 0 && m_curSet < (int)m_sets.size()) {
+            const auto& st2 = m_sets[m_curSet];
+            if (m_curBox >= 0 && m_curBox < (int)st2.boxes.size()) {
+                auto& b2 = st2.boxes[m_curBox];
+                if (m_drawIdx >= 0 && m_drawIdx < (int)b2.cards.size()) {
+                    QCard c2 = b2.cards[m_drawIdx];   // 拷贝改后落盘
+                    bool acted = false;
+                    if (InRect(m_remRect, mx, my)) {
+                        c2.lastReview = (long long)time(nullptr);
+                        acted = true;
+                        Toast(L"已记录：记住了（红色警示将淡出）");
+                    } else if (InRect(m_wrongRect, mx, my)) {
+                        c2.wrongCount += 1;
+                        c2.lastReview = (long long)time(nullptr);
+                        acted = true;
+                        Toast(L"已记录：答错了（卡片将变红警示）");
+                    }
+                    if (acted) {
+                        BoxStore::Instance().UpdateCard(b2.id, c2);
+                        m_sets = BoxStore::Instance().Load();
+                        StartDraw();   // 下一张（重新弹卡）
+                        return;
+                    }
+                }
+            }
+        }
+        if (InRect(m_nextRect, mx, my)) { StartDraw(); return; }
     }
 }
 
@@ -978,19 +1239,15 @@ void QuizBoxView::DebugForcePreview()
 
 void QuizBoxView::DebugForceOpen()
 {
-    // --edit 截图：进盒内 + 打开制卡弹窗（一图覆盖盒内卡片+制卡弹窗）
+    // --edit 截图：G3 抽卡态（弹卡完成 + 翻面到答案 + 记住/答错反馈按钮）
     if (m_sets.empty()) DebugForcePreview();
-    if (!m_sets.empty()) {
-        m_view = V_BOX; m_viewT = 1.0f;
+    if (!m_sets.empty() && !m_sets[0].boxes.empty() && !m_sets[0].boxes[0].cards.empty()) {
+        m_view = V_DRAW; m_viewT = 1.0f;
         m_curSet = 0; m_curBox = 0;
-        if (!m_sets[0].boxes.empty() && !m_sets[0].boxes[0].cards.empty()) {
-            m_drawIdx = 0; m_flip = true;
-        }
-        QCard demo; demo.id = L"qc_demo";
-        demo.front = L"示例题面：相邻两数的差是 7，和是 35，求这两数。";
-        demo.back  = L"35 ÷ 2 ± 7 ÷ 2 → 11 与 18。"; demo.tag = L"计算题";
-        demo.difficulty = 3; demo.added = (long long)time(nullptr);
-        OpenCardEditor(&demo);
+        m_drawIdx = 0;
+        m_flip = true;
+        m_popT = 1.0f;
+        m_flipT = 1.0f;
     }
 }
 
