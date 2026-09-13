@@ -3,7 +3,7 @@
 > 一款常驻轻量的备考桌面应用，服务考公 / 考研人群。
 > 原生 Windows C++ 桌面端 + 零依赖 Node 服务端，本地优先。
 
-![status](https://img.shields.io/badge/status-%E5%BC%80%E5%8F%91%E4%B8%AD%20%7C%20in%20development-268678) ![license](https://img.shields.io/badge/license-Apache--2.0-green) ![platform](https://img.shields.io/badge/platform-Windows-blue)
+![status](https://img.shields.io/badge/status-%E5%BC%80%E5%8F%91%E4%B8%AD%20%7C%20in%20development-268678) ![license](https://img.shields.io/badge/license-MIT-green) ![platform](https://img.shields.io/badge/platform-Windows-blue)
 
 > **状态：开发中（`v0.1.0-dev`）。** 这是公开的开发快照：核心闭环已可跑通，
 > 界面、文档与打包仍在打磨。已知事项见 [Roadmap](#roadmap)。
@@ -81,7 +81,7 @@ Server\启动服务端.bat
 
 ## 授权
 
-代码以 [Apache License 2.0](./LICENSE) 开源；**第三方 SDK、美术 / 音频 / 字体 / 题库内容不随仓库分发**，
+代码以 [MIT License](./LICENSE) 开源；**第三方 SDK、美术 / 音频 / 字体 / 题库内容不随仓库分发**，
 授权边界详见 [NOTICE.md](./NOTICE.md)。
 
 ## 作者
